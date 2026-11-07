@@ -57,7 +57,7 @@ sudo -u dates env $(cat /etc/datesin50states.env | xargs) node scripts/authorize
 
 Two ways to add them, both from the editor:
 
-1. **Upload or drag and drop.** Drag photos straight out of the Photos app into the drop zone, or click it to pick files (on iPhone it opens the photo library). The browser shrinks big images and converts HEIC to JPEG in Safari. The server then makes a 2000px JPEG and a 640px WebP thumbnail.
+1. **Upload.** Click the drop zone and pick **Photos** under *Media* in the file picker's sidebar to choose straight from the library (on iPhone it opens the photo library), or drop image files from Finder. Dragging directly out of Photos.app can crash Photos in some browsers (it fails while handing over the "promised" file), so use the picker instead. The browser shrinks big images and converts HEIC to JPEG in Safari. The server then makes a 2000px JPEG and a 640px WebP thumbnail.
 2. **iCloud Shared Album.** In Photos, create a shared album, tap the people icon, turn on **Public Website**, and copy the link (`https://www.icloud.com/sharedalbum/#…`). Paste it into the entry. The server downloads the album's photos (videos are skipped) and caches them locally, because iCloud's image URLs expire. Use **Sync album now** after adding more photos to the album. This relies on the same unofficial JSON endpoints the icloud.com shared-album page uses, so if Apple changes them the error shows up in the editor and uploads still work.
 
 ★ on a photo in the editor makes it the entry's cover (used on the home page postcards).

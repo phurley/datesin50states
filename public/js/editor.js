@@ -96,7 +96,7 @@
     function renderPhotos() {
       const has = Boolean(current);
       drop.classList.toggle('disabled', !has);
-      drop.textContent = has ? 'Drop photos here (straight from Photos works), or click to choose' : 'Save the entry first, then add photos';
+      drop.textContent = has ? 'Click to choose photos (pick “Photos” in the sidebar), or drop image files here' : 'Save the entry first, then add photos';
       syncBtn.hidden = !current?.album_url;
       syncNote.textContent = current?.syncing ? 'Pulling photos from iCloud…'
         : current?.album_error ? `Album sync failed: ${current.album_error}`
