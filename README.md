@@ -80,8 +80,10 @@ The server is `root@datesin50states.com` (Ubuntu 24.04, shared with allisonhurle
 
 ```bash
 ./deploy/provision.sh              # user, dirs, env file, systemd, nginx, Let's Encrypt cert
-# WITH_WWW=1 ./deploy/provision.sh # after adding a www A record -> 138.197.22.230
+# WITH_WWW=1 ./deploy/provision.sh # after the DNS record below exists: https cert for www
 ```
+
+**Subdomains:** Namecheap DNS has (or should have) a wildcard A record, `*` → `138.197.22.230`. nginx (`deploy/nginx-redirect.conf`) sends every `http://<sub>.datesin50states.com` to the apex. HTTPS redirects only work for names with a certificate, which is just `www` (`WITH_WWW=1`). Other subdomains redirect over http only.
 
 **Every release:**
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # One-time (idempotent) server setup. Run from your laptop:
 #   ./deploy/provision.sh                 # apex domain only
-#   WITH_WWW=1 ./deploy/provision.sh      # also www.datesin50states.com (needs a DNS A record first)
+#   WITH_WWW=1 ./deploy/provision.sh      # also an https cert for www (needs the DNS record first)
 # Then fill in /etc/datesin50states.env if needed and run ./deploy/deploy.sh.
 set -euo pipefail
 HOST="${DEPLOY_HOST:-root@datesin50states.com}"
 DOMAIN="${DOMAIN:-datesin50states.com}"
 NAMES="$DOMAIN"; CERT_ARGS="-d $DOMAIN"
-if [[ "${WITH_WWW:-0}" == 1 ]]; then NAMES="$DOMAIN www.$DOMAIN"; CERT_ARGS="$CERT_ARGS -d www.$DOMAIN"; fi
+WITH_WWW="${WITH_WWW:-0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 scp -q "$HERE/datesin50states.service" "$HOST:/etc/systemd/system/datesin50states.service"
@@ -16,7 +16,7 @@ sed "s/__SERVER_NAMES__/$NAMES/" "$HERE/nginx.conf" | ssh "$HOST" 'cat > /tmp/d5
 { cat "$HERE/nginx-redirect.conf"; echo; cat "$HERE/nginx-redirect-https.conf"; } | ssh "$HOST" 'cat > /tmp/d50-redirect.conf'
 scp -q "$HERE/backup.cron" "$HOST:/etc/cron.d/datesin50states-backup"
 
-ssh "$HOST" DOMAIN="$DOMAIN" CERT_ARGS="'$CERT_ARGS'" bash -s <<'REMOTE'
+ssh "$HOST" DOMAIN="$DOMAIN" WITH_WWW="$WITH_WWW" CERT_ARGS="'$CERT_ARGS'" bash -s <<'REMOTE'
 set -euo pipefail
 id dates &>/dev/null || useradd --system --home /opt/datesin50states --shell /usr/sbin/nologin dates
 install -d -o dates -g dates -m 755 /opt/datesin50states /opt/datesin50states/releases
@@ -44,15 +44,26 @@ else
 fi
 nginx -t && systemctl reload nginx
 
-# *.domain -> apex redirect (always refreshed). HTTPS block only if the wildcard cert exists.
-if [[ -d /etc/letsencrypt/live/$DOMAIN-wildcard ]]; then
-  cp /tmp/d50-redirect.conf /etc/nginx/sites-available/datesin50states-redirect.conf
-else
-  sed '/^#__HTTPS__/,$d' /tmp/d50-redirect.conf > /etc/nginx/sites-available/datesin50states-redirect.conf
-fi
-rm -f /tmp/d50-redirect.conf
+# *.domain -> apex redirect over HTTP (always). HTTPS redirect only for names we hold a cert for:
+# a wildcard cert ($DOMAIN-wildcard) if one exists, else www ($DOMAIN-www) when WITH_WWW=1.
+sed '/^#__HTTPS__/,$d' /tmp/d50-redirect.conf > /etc/nginx/sites-available/datesin50states-redirect.conf
 ln -sf /etc/nginx/sites-available/datesin50states-redirect.conf /etc/nginx/sites-enabled/datesin50states-redirect.conf
 nginx -t && systemctl reload nginx
+CERT=""; NAMES=""
+if [[ -d /etc/letsencrypt/live/$DOMAIN-wildcard ]]; then
+  CERT="$DOMAIN-wildcard"; NAMES="*.$DOMAIN"
+elif [[ "$WITH_WWW" == 1 ]]; then
+  [[ -d /etc/letsencrypt/live/$DOMAIN-www ]] || \
+    certbot certonly --webroot -w /var/www/html -d "www.$DOMAIN" --cert-name "$DOMAIN-www" \
+      --deploy-hook "systemctl reload nginx" --non-interactive --agree-tos
+  CERT="$DOMAIN-www"; NAMES="www.$DOMAIN"
+fi
+if [[ -n "$CERT" ]]; then
+  sed -n '/^#__HTTPS__/,$p' /tmp/d50-redirect.conf | sed "s/__HTTPS_NAMES__/$NAMES/; s/__CERT__/$CERT/g" \
+    >> /etc/nginx/sites-available/datesin50states-redirect.conf
+  nginx -t && systemctl reload nginx
+fi
+rm -f /tmp/d50-redirect.conf
 
 if [[ ! -d /etc/letsencrypt/live/$DOMAIN ]]; then
   certbot --nginx $CERT_ARGS --redirect --non-interactive --agree-tos
