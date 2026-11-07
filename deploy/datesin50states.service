@@ -1,0 +1,23 @@
+[Unit]
+Description=Dates in 50 States blog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dates
+Group=dates
+WorkingDirectory=/opt/datesin50states/current
+EnvironmentFile=/etc/datesin50states.env
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server.js
+Restart=on-failure
+RestartSec=3
+MemoryMax=450M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/datesin50states
+
+[Install]
+WantedBy=multi-user.target

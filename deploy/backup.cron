@@ -1,0 +1,3 @@
+# Nightly consistent SQLite snapshot; keeps 30 days. Photos live in /var/lib/datesin50states/media.
+SHELL=/bin/bash
+15 4 * * * dates cd /opt/datesin50states/current && /usr/bin/node --disable-warning=ExperimentalWarning scripts/backup.js >> /var/lib/datesin50states/backups/backup.log 2>&1

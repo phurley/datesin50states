@@ -1,0 +1,27 @@
+{
+  "name": "datesin50states",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Patrick & Susan's road-trip blog: dates in all 50 states",
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development DEV_LOGIN=1 node --watch server.js",
+    "build:map": "node scripts/build-map.js",
+    "authorize": "node scripts/authorize.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "jose": "^5.9.6",
+    "marked": "^15.0.6",
+    "multer": "^2.0.2",
+    "sanitize-html": "^2.14.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "topojson-client": "^3.1.0",
+    "us-atlas": "^3.0.1"
+  }
+}
