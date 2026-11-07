@@ -105,9 +105,13 @@
           : current?.album_synced_at ? `Album last synced ${current.album_synced_at} UTC` : '';
       photosEl.replaceChildren(...(current?.photos || []).map((p) => h('div', { class: `ed-photo${p.id === current.cover_photo_id ? ' cover' : ''}` },
         h('img', { src: `/media/${p.thumb}`, alt: '' }),
-        p.id === current.cover_photo_id ? h('span', { class: 'badge' }, 'COVER') : null,
+        h('div', { class: 'badges' },
+          p.id === current.cover_photo_id ? h('span', { class: 'badge' }, 'COVER') : null,
+          p.id === current.map_photo_id ? h('span', { class: 'badge map' }, 'MAP') : null),
         h('div', { class: 'tools' },
           h('button', { type: 'button', title: 'Use as cover', onclick: () => photoAction('PUT', p.id, { cover: true }) }, '★'),
+          h('button', { type: 'button', title: p.id === current.map_photo_id ? 'Stop using on the map' : `Fill ${stateName} on the map with this photo`,
+            onclick: () => photoAction('PUT', p.id, { map: p.id !== current.map_photo_id }) }, '🗺'),
           h('button', { type: 'button', title: 'Remove photo', onclick: () => { if (confirm('Remove this photo?')) photoAction('DELETE', p.id); } }, '✕')))));
       clearTimeout(pollTimer);
       if (current?.syncing) pollTimer = setTimeout(refresh, 3000);

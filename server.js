@@ -37,6 +37,23 @@ app.use(loadAuthor);
 
 const VALID_STATE = (code) => Boolean(views.STATE_BY_CODE[String(code || '').toUpperCase()]);
 
+// One photo per visited state for the map: the chosen one, else the newest entry's cover, else any photo.
+function mapPhotos() {
+  const rows = db.prepare(`
+    SELECT e.state,
+      COALESCE(
+        (SELECT p.thumb FROM state_photos sp JOIN photos p ON p.id = sp.photo_id WHERE sp.state = e.state),
+        (SELECT p.thumb FROM entries e2 JOIN photos p ON p.id = e2.cover_photo_id
+           WHERE e2.state = e.state ORDER BY COALESCE(e2.date, e2.created_at) DESC, e2.id DESC LIMIT 1),
+        (SELECT p.thumb FROM entries e3 JOIN photos p ON p.entry_id = e3.id
+           WHERE e3.state = e.state ORDER BY COALESCE(e3.date, e3.created_at) DESC, p.position LIMIT 1)
+      ) AS thumb
+    FROM entries e GROUP BY e.state`).all();
+  const out = {};
+  for (const r of rows) if (r.thumb) out[r.state] = r.thumb;
+  return out;
+}
+
 function stateCounts() {
   const out = {};
   for (const r of db.prepare('SELECT state, COUNT(*) AS n FROM entries GROUP BY state').all()) out[r.state] = r.n;
@@ -69,7 +86,9 @@ function entriesFor(state) {
 function getEntry(id) {
   const e = db.prepare('SELECT * FROM entries WHERE id = ?').get(Number(id));
   if (!e) return null;
-  return { ...e, photos: photosFor([e.id])[e.id] || [], syncing: isSyncing(e.id), album_kind: albumKind(e.album_url) };
+  const map = db.prepare('SELECT photo_id FROM state_photos WHERE state = ?').get(e.state);
+  return { ...e, photos: photosFor([e.id])[e.id] || [], syncing: isSyncing(e.id), album_kind: albumKind(e.album_url),
+    map_photo_id: map?.photo_id ?? null };
 }
 
 function cleanEntry(body) {
@@ -92,10 +111,16 @@ function cleanEntry(body) {
 // --- Pages -------------------------------------------------------------------
 
 app.get('/', (req, res) => {
-  const recent = db.prepare(`SELECT e.id, e.state, e.title, e.date,
-      (SELECT thumb FROM photos p WHERE p.id = e.cover_photo_id) AS thumb
-    FROM entries e ORDER BY COALESCE(e.date, e.created_at) DESC, e.id DESC LIMIT 6`).all();
-  res.send(views.mapPage({ author: req.author, counts: stateCounts(), recent }));
+  const recent = db.prepare(`SELECT e.id, e.state, e.title, e.date, e.cover_photo_id
+    FROM entries e ORDER BY COALESCE(e.date, e.created_at) DESC, e.id DESC LIMIT 6`).all().map((e) => ({ ...e }));
+  // Postcard slideshows: cover first, then the rest in order, capped to keep the page light.
+  const photos = photosFor(recent.map((e) => e.id));
+  for (const e of recent) {
+    const list = photos[e.id] || [];
+    list.sort((a, b) => (b.id === e.cover_photo_id) - (a.id === e.cover_photo_id));
+    e.thumbs = list.slice(0, 10).map((p) => p.thumb);
+  }
+  res.send(views.mapPage({ author: req.author, counts: stateCounts(), photos: mapPhotos(), recent }));
 });
 
 app.get('/state/:code', (req, res) => {
@@ -242,6 +267,15 @@ api.put('/photos/:id', (req, res) => {
   if (!p) return res.status(404).json({ error: 'Not found.' });
   if ('caption' in req.body) db.prepare('UPDATE photos SET caption = ? WHERE id = ?').run(String(req.body.caption).slice(0, 500), p.id);
   if (req.body.cover) db.prepare('UPDATE entries SET cover_photo_id = ? WHERE id = ?').run(p.id, p.entry_id);
+  if ('map' in req.body) {
+    const { state } = db.prepare('SELECT state FROM entries WHERE id = ?').get(p.entry_id);
+    if (req.body.map) {
+      db.prepare(`INSERT INTO state_photos (state, photo_id) VALUES (?, ?)
+        ON CONFLICT(state) DO UPDATE SET photo_id = excluded.photo_id`).run(state, p.id);
+    } else {
+      db.prepare('DELETE FROM state_photos WHERE state = ? AND photo_id = ?').run(state, p.id);
+    }
+  }
   res.json({ entry: getEntry(p.entry_id) });
 });
 

@@ -37,3 +37,21 @@
     }
   });
 })();
+
+// Postcard slideshows: slow crossfade, staggered so cards don't change in lockstep.
+(() => {
+  const shows = [...document.querySelectorAll('.pc-img.slideshow')];
+  if (!shows.length) return;
+  const slow = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const INTERVAL = slow ? 9000 : 5500;
+  shows.forEach((box, i) => {
+    const imgs = [...box.querySelectorAll('img')];
+    let idx = 0;
+    setTimeout(() => setInterval(() => {
+      if (document.hidden) return;
+      imgs[idx].classList.remove('on');
+      idx = (idx + 1) % imgs.length;
+      imgs[idx].classList.add('on');
+    }, INTERVAL), i * 1400);
+  });
+})();

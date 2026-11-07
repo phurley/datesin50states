@@ -64,6 +64,10 @@ Two ways to add them, both from the editor:
 
 ★ on a photo in the editor makes it the entry's cover (used on the home page postcards).
 
+**On the map**, a visited state is filled with one of its photos, cropped to the state's outline. 🗺 on a photo in the editor picks it for that state (click again to unpick). Without a pick, the state uses the newest entry's cover, then any photo. States with entries but no photos keep their sticker color.
+
+**On the home page**, the "Latest from the road" postcards slowly crossfade through each entry's photos, starting with the cover and showing up to 10.
+
 ## Deploy
 
 The server is `root@datesin50states.com` (Ubuntu 24.04, shared with allisonhurley.com). The app runs as system user `dates` behind the nginx that's already there.
