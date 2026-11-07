@@ -64,7 +64,14 @@ Two ways to add them, both from the editor:
 
 ★ on a photo in the editor makes it the entry's cover (used on the home page postcards).
 
-**On the map**, a visited state is filled with one of its photos, cropped to the state's outline. 🗺 on a photo in the editor picks it for that state (click again to unpick). Without a pick, the state uses the newest entry's cover, then any photo. States with entries but no photos keep their sticker color.
+**On the map**, a visited state is filled with one of its photos, cropped to the state's outline. 🗺 on a photo in the editor picks it for that state (click again to unpick). Without a pick, the state uses the newest entry's cover, then any photo. If it has no photos at all, it shows its **default illustration**: a vintage national-park-poster image of the state's signature park or attraction, in `public/img/states/XX.webp`. Postcards for entries without photos use the same illustration.
+
+The illustrations are a single committed set, generated once with Gemini (`gemini-3.1-flash-image`). The subject for each state is listed in `lib/state-attractions.json`. To redo one, or all missing ones:
+
+```bash
+GEMINI_API_KEY=... node scripts/gen-state-art.js KY      # regenerate Kentucky
+GEMINI_API_KEY=... node scripts/gen-state-art.js         # fill in any missing states
+```
 
 **On the home page**, the "Latest from the road" postcards slowly crossfade through each entry's photos, starting with the cover and showing up to 10.
 

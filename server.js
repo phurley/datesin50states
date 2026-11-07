@@ -50,7 +50,7 @@ function mapPhotos() {
       ) AS thumb
     FROM entries e GROUP BY e.state`).all();
   const out = {};
-  for (const r of rows) if (r.thumb) out[r.state] = r.thumb;
+  for (const r of rows) out[r.state] = r.thumb ? `/media/${r.thumb}` : views.stateArt(r.state);
   return out;
 }
 
@@ -118,7 +118,8 @@ app.get('/', (req, res) => {
   for (const e of recent) {
     const list = photos[e.id] || [];
     list.sort((a, b) => (b.id === e.cover_photo_id) - (a.id === e.cover_photo_id));
-    e.thumbs = list.slice(0, 10).map((p) => p.thumb);
+    e.thumbs = list.slice(0, 10).map((p) => `/media/${p.thumb}`);
+    if (!e.thumbs.length) e.thumbs = [views.stateArt(e.state)];
   }
   res.send(views.mapPage({ author: req.author, counts: stateCounts(), photos: mapPhotos(), recent }));
 });
