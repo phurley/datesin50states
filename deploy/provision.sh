@@ -12,6 +12,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 scp -q "$HERE/datesin50states.service" "$HOST:/etc/systemd/system/datesin50states.service"
 sed "s/__SERVER_NAMES__/$NAMES/" "$HERE/nginx.conf" | ssh "$HOST" 'cat > /tmp/d50-nginx.conf'
+# subdomain redirect; the 443 half is added only once a wildcard cert exists
+{ cat "$HERE/nginx-redirect.conf"; echo; cat "$HERE/nginx-redirect-https.conf"; } | ssh "$HOST" 'cat > /tmp/d50-redirect.conf'
 scp -q "$HERE/backup.cron" "$HOST:/etc/cron.d/datesin50states-backup"
 
 ssh "$HOST" DOMAIN="$DOMAIN" CERT_ARGS="'$CERT_ARGS'" bash -s <<'REMOTE'
@@ -40,6 +42,16 @@ if [[ ! -f /etc/nginx/sites-available/datesin50states.conf ]]; then
 else
   rm -f /tmp/d50-nginx.conf
 fi
+nginx -t && systemctl reload nginx
+
+# *.domain -> apex redirect (always refreshed). HTTPS block only if the wildcard cert exists.
+if [[ -d /etc/letsencrypt/live/$DOMAIN-wildcard ]]; then
+  cp /tmp/d50-redirect.conf /etc/nginx/sites-available/datesin50states-redirect.conf
+else
+  sed '/^#__HTTPS__/,$d' /tmp/d50-redirect.conf > /etc/nginx/sites-available/datesin50states-redirect.conf
+fi
+rm -f /tmp/d50-redirect.conf
+ln -sf /etc/nginx/sites-available/datesin50states-redirect.conf /etc/nginx/sites-enabled/datesin50states-redirect.conf
 nginx -t && systemctl reload nginx
 
 if [[ ! -d /etc/letsencrypt/live/$DOMAIN ]]; then
