@@ -58,7 +58,9 @@ sudo -u dates env $(cat /etc/datesin50states.env | xargs) node scripts/authorize
 Two ways to add them, both from the editor:
 
 1. **Upload.** Click the drop zone and pick **Photos** under *Media* in the file picker's sidebar to choose straight from the library (on iPhone it opens the photo library), or drop image files from Finder. Dragging directly out of Photos.app can crash Photos in some browsers (it fails while handing over the "promised" file), so use the picker instead. The browser shrinks big images and converts HEIC to JPEG in Safari. The server then makes a 2000px JPEG and a 640px WebP thumbnail.
-2. **iCloud Shared Album.** In Photos, create a shared album, tap the people icon, turn on **Public Website**, and copy the link (`https://www.icloud.com/sharedalbum/#…`). Paste it into the entry. The server downloads the album's photos (videos are skipped) and caches them locally, because iCloud's image URLs expire. Use **Sync album now** after adding more photos to the album. This relies on the same unofficial JSON endpoints the icloud.com shared-album page uses, so if Apple changes them the error shows up in the editor and uploads still work.
+2. **iCloud album link.** Paste the album's share link into the entry:
+   - **Shared Collections** (`https://photos.icloud.com/shared/album/…`, the current Photos default) are **linked, not imported**. Their photos are encrypted and only decrypted inside Apple's web page, so the server can't fetch them. The entry shows "See “<album title>” in iCloud Photos →", with the title read from CloudKit's public share lookup. Add the photos you want shown via the picker.
+   - **Classic Shared Albums with Public Website** (`https://www.icloud.com/sharedalbum/#…`) are imported. The server downloads the photos (videos skipped) and caches them, because iCloud's image URLs expire, and **Sync album now** picks up additions. This uses the unofficial endpoints the old album page uses.
 
 ★ on a photo in the editor makes it the entry's cover (used on the home page postcards).
 

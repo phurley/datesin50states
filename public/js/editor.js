@@ -82,7 +82,7 @@
       date: h('input', { name: 'date', type: 'date', value: entry.id ? (entry.date || '') : new Date().toLocaleDateString('en-CA') }),
       place: h('input', { name: 'place', maxlength: 200, placeholder: 'City, park, or campground', value: entry.place || '' }),
       body: h('textarea', { name: 'body', placeholder: 'Tell the story… (Markdown works: **bold**, _italics_, > quotes)' }),
-      album_url: h('input', { name: 'album_url', type: 'url', placeholder: 'https://www.icloud.com/sharedalbum/#…', value: entry.album_url || '' }),
+      album_url: h('input', { name: 'album_url', type: 'url', placeholder: 'https://photos.icloud.com/shared/album/…', value: entry.album_url || '' }),
     };
     f.body.value = entry.body || '';
 
@@ -97,8 +97,10 @@
       const has = Boolean(current);
       drop.classList.toggle('disabled', !has);
       drop.textContent = has ? 'Click to choose photos (pick “Photos” in the sidebar), or drop image files here' : 'Save the entry first, then add photos';
-      syncBtn.hidden = !current?.album_url;
-      syncNote.textContent = current?.syncing ? 'Pulling photos from iCloud…'
+      syncBtn.hidden = current?.album_kind !== 'legacy';
+      syncNote.textContent = current?.album_kind === 'collection'
+        ? `Album linked${current.album_title ? ` (“${current.album_title}”)` : ''}: shown as a link on the entry. iCloud doesn’t allow importing this album type, so add the photos you want here.`
+        : current?.syncing ? 'Pulling photos from iCloud…'
         : current?.album_error ? `Album sync failed: ${current.album_error}`
           : current?.album_synced_at ? `Album last synced ${current.album_synced_at} UTC` : '';
       photosEl.replaceChildren(...(current?.photos || []).map((p) => h('div', { class: `ed-photo${p.id === current.cover_photo_id ? ' cover' : ''}` },
@@ -176,7 +178,7 @@
       h('label', {}, 'Title', f.title),
       h('div', { class: 'ed-row' }, h('label', {}, 'Date', f.date), h('label', {}, 'Where', f.place)),
       h('label', {}, 'The story', f.body),
-      h('label', {}, h('span', {}, 'iCloud shared album link ', h('small', {}, '(optional; in Photos: shared album → People → Public Website → Share Link)')), f.album_url),
+      h('label', {}, h('span', {}, 'iCloud shared album link ', h('small', {}, '(optional; shown as a link on the entry. Classic “Public Website” albums also get their photos imported)')), f.album_url),
       h('div', { class: 'ed-actions' }, delBtn, h('div', { class: 'right' }, status, saveBtn)));
 
     frame(current ? 'Edit entry' : 'New entry', stateName,

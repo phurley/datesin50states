@@ -6,7 +6,7 @@ import { config } from './lib/config.js';
 import { db, tx } from './lib/db.js';
 import { loadAuthor, requireAuthor, startSession, endSession, appleRedirect, appleCallback, clearSiwa } from './lib/auth.js';
 import { storeImage, removeImage } from './lib/media.js';
-import { albumToken, syncAlbum, isSyncing } from './lib/icloud.js';
+import { albumKind, collectionTitle, syncAlbum, isSyncing } from './lib/icloud.js';
 import * as views from './lib/views.js';
 
 const app = express();
@@ -61,6 +61,7 @@ function entriesFor(state) {
     // cover photo first
     if (e.cover_photo_id) e.photos.sort((a, b) => (b.id === e.cover_photo_id) - (a.id === e.cover_photo_id));
     e.syncing = isSyncing(e.id);
+    e.album_kind = albumKind(e.album_url);
   }
   return entries;
 }
@@ -68,7 +69,7 @@ function entriesFor(state) {
 function getEntry(id) {
   const e = db.prepare('SELECT * FROM entries WHERE id = ?').get(Number(id));
   if (!e) return null;
-  return { ...e, photos: photosFor([e.id])[e.id] || [], syncing: isSyncing(e.id) };
+  return { ...e, photos: photosFor([e.id])[e.id] || [], syncing: isSyncing(e.id), album_kind: albumKind(e.album_url) };
 }
 
 function cleanEntry(body) {
@@ -82,8 +83,8 @@ function cleanEntry(body) {
   };
   if (!out.title) return { error: 'Give the entry a title.' };
   if (out.date && !/^\d{4}-\d{2}-\d{2}$/.test(out.date)) return { error: 'Date should be YYYY-MM-DD.' };
-  if (out.album_url && !albumToken(out.album_url)) {
-    return { error: 'That doesn’t look like an iCloud shared album link (https://www.icloud.com/sharedalbum/#…).' };
+  if (out.album_url && !albumKind(out.album_url)) {
+    return { error: 'That doesn’t look like an iCloud shared album link (photos.icloud.com/shared/album/… or icloud.com/sharedalbum/#…).' };
   }
   return { entry: out };
 }
@@ -157,8 +158,14 @@ api.get('/entries/:id', (req, res) => {
   e ? res.json({ entry: e }) : res.status(404).json({ error: 'Not found.' });
 });
 
+// Legacy shared albums get imported; newer shared collections just get their title for the link.
 function kickSync(id) {
-  syncAlbum(id).catch((e) => console.error('[icloud]', e));
+  const e = db.prepare('SELECT album_url FROM entries WHERE id = ?').get(id);
+  const kind = albumKind(e?.album_url);
+  if (kind === 'legacy') syncAlbum(id).catch((err) => console.error('[icloud]', err));
+  if (kind === 'collection') {
+    collectionTitle(e.album_url).then((t) => db.prepare('UPDATE entries SET album_title = ?, album_error = NULL WHERE id = ?').run(t, id));
+  }
 }
 
 api.post('/entries', (req, res) => {
@@ -180,7 +187,10 @@ api.put('/entries/:id', (req, res) => {
   if (error) return res.status(400).json({ error });
   db.prepare(`UPDATE entries SET title = ?, date = ?, place = ?, body = ?, album_url = ?, updated_at = datetime('now')
     WHERE id = ?`).run(entry.title, entry.date, entry.place, entry.body, entry.album_url, existing.id);
-  if (entry.album_url && entry.album_url !== existing.album_url) kickSync(existing.id);
+  if (entry.album_url !== existing.album_url) {
+    db.prepare('UPDATE entries SET album_title = NULL WHERE id = ?').run(existing.id);
+    if (entry.album_url) kickSync(existing.id);
+  }
   res.json({ entry: getEntry(existing.id) });
 });
 
@@ -196,6 +206,7 @@ api.post('/entries/:id/sync', (req, res) => {
   const e = getEntry(req.params.id);
   if (!e) return res.status(404).json({ error: 'Not found.' });
   if (!e.album_url) return res.status(400).json({ error: 'No album link on this entry.' });
+  if (e.album_kind !== 'legacy') return res.status(400).json({ error: 'This kind of iCloud album can only be linked, not imported.' });
   kickSync(e.id);
   res.json({ ok: true, syncing: true });
 });
