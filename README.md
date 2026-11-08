@@ -75,7 +75,7 @@ GEMINI_API_KEY=... node scripts/gen-state-art.js         # fill in any missing s
 
 **On the state page**, the header uses the same illustration as a faded backdrop and fills the state stamp with it.
 
-**The map tour.** A faint ▶ in the map's bottom-right corner starts a tour: the map gently zooms to each entry's state in date order (oldest first) and loops. The ‹ date › control steps back and forth, clicking the date pauses or resumes, and × (or Esc) zooms back out.
+**The map tour.** A faint ▶ in the map's bottom-right corner replays the trip in date order (oldest first) and loops. The map starts blank except for the first stop, and each state appears as the timeline reaches it: the current state is bright and outlined, earlier ones are faded. The map doesn't zoom unless you click it (or pinch out on a phone), which follows each stop zoomed in; click again (or pinch in) for the whole map. The ‹ date › control steps back and forth, clicking the date pauses or resumes, and × (or Esc) ends the tour.
 
 **On the home page**, the "Latest from the road" postcards slowly crossfade through each entry's photos, starting with the cover and showing up to 10.
 

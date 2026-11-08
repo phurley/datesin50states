@@ -124,8 +124,15 @@ img { max-width: 100%; }
 /* Map tour: a barely-there play button, then a quiet ‹ date › control. */
 .usa.touring { overflow: hidden; }
 .usa .st { transition: opacity .9s ease; }
-.usa.touring .st:not(.tour-on) { opacity: .42; }
+/* Not reached yet on the timeline: drawn like an unvisited state (beats the inline photo fill). */
+.usa.touring .st.tour-future path { fill: var(--unvisited) !important; stroke: var(--unvisited-edge); stroke-width: 1.2; }
+.usa.touring .st.tour-past { opacity: .42; }
 .usa.touring .st.tour-on path { stroke: var(--ink); stroke-width: 1.6; }
+.usa.touring .st.tour-new { animation: tour-reveal 1.2s ease; }
+@keyframes tour-reveal { from { opacity: 0; } }
+.usa.touring { cursor: zoom-in; touch-action: pan-x pan-y; }
+.usa.touring.following { cursor: zoom-out; }
+.usa.touring a.st { cursor: inherit; }
 .usa .st path, .pin circle { vector-effect: non-scaling-stroke; }
 .pin { transition: opacity .9s ease; }
 .usa.touring .pin:not(.tour-on) { opacity: 0; }
@@ -163,7 +170,7 @@ img { max-width: 100%; }
   .tour-ctl { right: 0; bottom: -6px; left: 0; justify-content: space-between; }
   .tour-date { flex: 1; max-width: none; }
 }
-@media (prefers-reduced-motion: reduce) { .tour-ctl { animation: none; } .usa .st, .pin { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .tour-ctl, .usa.touring .st.tour-new { animation: none; } .usa .st, .pin { transition: none; } }
 .map-legend { font: 14px var(--sans); color: var(--ink-soft); text-align: center; margin: 14px 0 0; }
 .map-legend .key { display: inline-block; width: 14px; height: 14px; border-radius: 4px; background: var(--unvisited); vertical-align: -2px; margin: 0 4px 0 14px; }
 .map-legend .visited-key { background: linear-gradient(135deg, var(--rust) 0 33%, var(--mustard) 33% 66%, var(--teal) 66%); margin-left: 0; }

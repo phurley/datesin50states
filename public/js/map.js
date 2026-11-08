@@ -7,6 +7,7 @@
   const authed = Boolean(document.querySelector('.driver-bar'));
 
   function show(el, evt) {
+    if (el.classList.contains('tour-future')) return hide(); // don't spoil the tour
     const n = Number(el.dataset.n);
     tip.innerHTML = '';
     tip.append(el.dataset.name);
@@ -56,8 +57,10 @@
   });
 })();
 
-// Map tour: ▶ zooms gently from state to state in date order and loops.
-// ‹ › step, clicking the date pauses/resumes, × or Esc zooms back out.
+// Map tour: ▶ replays the trip in date order and loops. States start blank and are
+// revealed as the timeline reaches them; the current one is bright, earlier ones faded.
+// The map stays put unless you click it (or pinch out on a phone) to follow along zoomed in.
+// ‹ › step, clicking the date pauses/resumes, × or Esc ends the tour.
 (() => {
   const svg = document.querySelector('.usa');
   const play = document.querySelector('.tour-play');
@@ -70,9 +73,10 @@
   const W = 975, H = 610, FULL = [0, 0, W, H];
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const ZOOM_MS = still ? 0 : 1600;
-  const DWELL = still ? 6000 : 4200;
+  const STEP_MS = still ? 6000 : 5800;
   const dateBtn = ctl.querySelector('.tour-date');
-  let idx = 0, running = false, timer = null, frame = null, vb = FULL.slice();
+  const visited = [...svg.querySelectorAll('.st.visited')];
+  let idx = 0, running = false, touring = false, follow = false, timer = null, frame = null, vb = FULL.slice();
 
   const fmt = (d) => d
     ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
@@ -98,22 +102,45 @@
     let w = Math.max(b.width * 1.9, W * 0.5), h = Math.max(b.height * 1.9, H * 0.5);
     if (w / h > W / H) h = (w * H) / W; else w = (h * W) / H;
     w = Math.min(w, W); h = Math.min(h, H);
-    // Nudge up a little so the control in the corner doesn't sit on the state.
+    // Nudge up a little so the control in the corner doesn't sit on the state
     // (lets the view run a little past the map's bottom edge for that).
     const x = Math.max(0, Math.min(W - w, b.x + b.width / 2 - w / 2 + w * 0.04));
     const y = Math.max(0, Math.min(H - h * 0.88, b.y + b.height / 2 - h / 2 + h * 0.1));
     return [x, y, w, h];
   }
 
+  function setFollow(on) {
+    if (!touring || follow === on) return;
+    follow = on;
+    svg.classList.toggle('following', on);
+    zoomTo(on ? boxFor(stops[idx].state) : FULL, ZOOM_MS);
+  }
+
+  // Reveal every state the timeline has reached; the rest of the map is blank.
+  function paint() {
+    const cur = stops[idx].state;
+    const seen = new Set(stops.slice(0, idx + 1).map((s) => s.state));
+    for (const el of visited) {
+      const code = el.dataset.code;
+      const wasBlank = el.classList.contains('tour-future');
+      el.classList.toggle('tour-future', !seen.has(code));
+      el.classList.toggle('tour-past', seen.has(code) && code !== cur);
+      el.classList.toggle('tour-on', code === cur);
+      if (code === cur && wasBlank && !still) {
+        el.classList.remove('tour-new'); void el.getBBox(); el.classList.add('tour-new');
+      }
+    }
+    svg.querySelectorAll('.pin').forEach((p) => p.classList.toggle('tour-on', p.dataset.code === cur));
+  }
+
   function show(i) {
     idx = (i + stops.length) % stops.length;
     const s = stops[idx];
-    svg.querySelectorAll('.tour-on').forEach((el) => el.classList.remove('tour-on'));
-    svg.querySelectorAll(`[data-code="${s.state}"]`).forEach((el) => el.classList.add('tour-on'));
+    paint();
     dateBtn.querySelector('b').textContent = fmt(s.date);
     dateBtn.querySelector('small').textContent = `${s.name} · ${s.title}`;
     dateBtn.title = `${s.name}: ${s.title}`;
-    zoomTo(boxFor(s.state), ZOOM_MS);
+    if (follow) zoomTo(boxFor(s.state), ZOOM_MS);
     schedule();
   }
 
@@ -122,9 +149,9 @@
     ctl.classList.remove('running');
     if (!running) return;
     void ctl.offsetWidth; // restart the progress bar animation
-    ctl.style.setProperty('--dwell', `${(ZOOM_MS + DWELL) / 1000}s`);
+    ctl.style.setProperty('--dwell', `${STEP_MS / 1000}s`);
     ctl.classList.add('running');
-    timer = setTimeout(() => { if (!document.hidden) show(idx + 1); else schedule(); }, ZOOM_MS + DWELL);
+    timer = setTimeout(() => { if (!document.hidden) show(idx + 1); else schedule(); }, STEP_MS);
   }
 
   function setRunning(on) {
@@ -137,6 +164,7 @@
   function start() {
     play.hidden = true;
     ctl.hidden = false;
+    touring = true;
     svg.classList.add('touring');
     running = true;
     ctl.classList.remove('paused');
@@ -145,13 +173,15 @@
   }
 
   function stop() {
-    running = false;
+    touring = running = follow = false;
     clearTimeout(timer);
     ctl.classList.remove('running');
     ctl.hidden = true;
     play.hidden = false;
-    svg.querySelectorAll('.tour-on').forEach((el) => el.classList.remove('tour-on'));
-    zoomTo(FULL, ZOOM_MS, () => { svg.classList.remove('touring'); svg.setAttribute('viewBox', FULL.join(' ')); });
+    svg.classList.remove('following');
+    svg.querySelectorAll('.tour-on, .tour-past, .tour-future, .tour-new')
+      .forEach((el) => el.classList.remove('tour-on', 'tour-past', 'tour-future', 'tour-new'));
+    zoomTo(FULL, ZOOM_MS, () => { if (!touring) { svg.classList.remove('touring'); svg.setAttribute('viewBox', FULL.join(' ')); } });
   }
 
   play.addEventListener('click', start);
@@ -165,4 +195,24 @@
     else if (e.key === 'ArrowLeft' && ctl.contains(document.activeElement)) show(idx - 1);
     else if (e.key === 'ArrowRight' && ctl.contains(document.activeElement)) show(idx + 1);
   });
+
+  // During the tour a click on the map toggles follow-zoom instead of opening a state.
+  svg.addEventListener('click', (e) => {
+    if (!touring) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    setFollow(!follow);
+  }, true);
+
+  // Phones: pinch out to follow zoomed in, pinch in to see the whole map again.
+  let pinch0 = 0;
+  const spread = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  svg.addEventListener('touchstart', (e) => { pinch0 = touring && e.touches.length === 2 ? spread(e.touches) : 0; }, { passive: true });
+  svg.addEventListener('touchmove', (e) => {
+    if (!pinch0 || e.touches.length !== 2) return;
+    e.preventDefault();
+    const r = spread(e.touches) / pinch0;
+    if (r > 1.15) { setFollow(true); pinch0 = 0; } else if (r < 0.87) { setFollow(false); pinch0 = 0; }
+  }, { passive: false });
+  svg.addEventListener('gesturestart', (e) => { if (touring) e.preventDefault(); }); // iOS Safari page zoom
 })();
