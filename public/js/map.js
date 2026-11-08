@@ -75,6 +75,7 @@
   const ZOOM_MS = still ? 0 : 1600;
   const STEP_MS = still ? 6000 : 5800;
   const dateBtn = ctl.querySelector('.tour-date');
+  const legend = document.querySelector('.map-legend');
   const visited = [...svg.querySelectorAll('.st.visited')];
   let idx = 0, running = false, touring = false, follow = false, timer = null, frame = null, vb = FULL.slice();
 
@@ -102,10 +103,8 @@
     let w = Math.max(b.width * 1.9, W * 0.5), h = Math.max(b.height * 1.9, H * 0.5);
     if (w / h > W / H) h = (w * H) / W; else w = (h * W) / H;
     w = Math.min(w, W); h = Math.min(h, H);
-    // Nudge up a little so the control in the corner doesn't sit on the state
-    // (lets the view run a little past the map's bottom edge for that).
-    const x = Math.max(0, Math.min(W - w, b.x + b.width / 2 - w / 2 + w * 0.04));
-    const y = Math.max(0, Math.min(H - h * 0.88, b.y + b.height / 2 - h / 2 + h * 0.1));
+    const x = Math.max(0, Math.min(W - w, b.x + b.width / 2 - w / 2));
+    const y = Math.max(0, Math.min(H - h, b.y + b.height / 2 - h / 2));
     return [x, y, w, h];
   }
 
@@ -163,6 +162,7 @@
 
   function start() {
     play.hidden = true;
+    if (legend) legend.hidden = true;
     ctl.hidden = false;
     touring = true;
     svg.classList.add('touring');
@@ -178,6 +178,7 @@
     ctl.classList.remove('running');
     ctl.hidden = true;
     play.hidden = false;
+    if (legend) legend.hidden = false;
     svg.classList.remove('following');
     svg.querySelectorAll('.tour-on, .tour-past, .tour-future, .tour-new')
       .forEach((el) => el.classList.remove('tour-on', 'tour-past', 'tour-future', 'tour-new'));
