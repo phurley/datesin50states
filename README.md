@@ -27,6 +27,8 @@ npm run dev            # http://localhost:3050, data in ./data
 | `APPLE_CLIENT_ID` | — | Sign in with Apple **Services ID** (`com.datesin50states.signin`) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | Google OAuth web client. The Google button hides until both are set |
 | `AUTHOR_EMAILS` | `phurley@gmail.com:Patrick,sue.hurley@gmail.com:Susan` | Admins: no limits, the root map (`email:Name`, comma separated) |
+| `R2_ACCOUNT_ID` / `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | — | Cloudflare R2 bucket for photos (see *Photo storage*) |
+| `MEDIA_URL` | `/media` | Public base URL for photos. R2 is used only when the R2 vars are set **and** this is an `https://` URL |
 | `TYPESAFE_API_KEY` | — | Jev (typesafe.ai): checks names, addresses, and map text. Unset = no text checks |
 | `GOOGLE_VISION_API_KEY` | — | Cloud Vision SafeSearch: checks photos. Unset = no photo checks |
 | `TEXT_FLAG_AT` / `PHOTO_STRIKES_ALLOWED` | `0.6` / `10` | Jev score that refuses text; refused photos allowed before an account is blocked |
@@ -97,6 +99,22 @@ A collection is a page that shows several maps together, e.g. `/the-road-crew/` 
 - **Failures:** if Jev or Vision is unreachable, content is allowed and the error is logged, so an outage doesn't stop uploads.
 - **Keys:** the Vision key belongs to the Google Cloud project `datesin50states` (same one as Google sign-in). It's restricted to the Cloud Vision API and to the server's IP (138.197.22.230), so it only works from the server. SafeSearch's first 1,000 images a month are free, then about $1.50 per 1,000.
 
+## Photo storage (Cloudflare R2)
+
+Production photos live in the R2 bucket **`datesin50states-media`** (Cloudflare account phurley@gmail.com) and are served from **`https://media.datesin50states.com`**, the bucket's custom domain, cached by Cloudflare. Serving photos is free on R2; storage is free up to 10 GB.
+
+- **Flow:** an upload is resized and moderated on the server as before (`lib/media.js`, `lib/moderation.js`), then `commitImage` (`lib/storage.js`) PUTs the large JPEG and the thumbnail to R2 and deletes the local copies. Deleting a photo deletes its R2 objects. Keys are the same relative paths as before (`ab/<uuid>.jpg`), so database rows don't change; objects are `Cache-Control: immutable`.
+- **Client:** [`aws4fetch`](https://github.com/mhart/aws4fetch) signs S3 requests to `https://<account>.r2.cloudflarestorage.com`. No AWS SDK.
+- **Credentials:** an R2 Account API token with *Object Read & Write* on this bucket only, limited to the server's IP (138.197.22.230). It's in `/etc/datesin50states.env`.
+- **Local dev / no R2:** leave the R2 vars or `MEDIA_URL` unset and photos stay in `DATA_DIR/media`, served at `/media` (nginx serves that path directly in production as a fallback).
+- **Copying existing photos:** `node scripts/migrate-media-to-r2.js` uploads and verifies every photo in the database (safe to re-run); `--delete-local` then removes local copies that verified. On the server:
+  ```bash
+  cd /opt/datesin50states/current
+  sudo -u dates env $(grep -v '^#' /etc/datesin50states.env | xargs) node scripts/migrate-media-to-r2.js
+  ```
+- **DNS:** datesin50states.com's nameservers are Cloudflare's (`michelle` / `sullivan.ns.cloudflare.com`), set at Namecheap, which is still the registrar. The site's own records (apex, `www`) are **DNS only**, so traffic goes straight to the server as before; only `media` is served by Cloudflare.
+- **Billing:** Cloudflare has no prepaid cap for R2; budget alerts email at $5 and $10.
+
 ## Photos
 
 Two ways to add them, both from the editor:
@@ -144,7 +162,7 @@ The server is `root@datesin50states.com` (Ubuntu 24.04, shared with allisonhurle
 # WITH_WWW=1 ./deploy/provision.sh # after the DNS record below exists: https cert for www
 ```
 
-**Subdomains:** Namecheap DNS has (or should have) a wildcard A record, `*` → `138.197.22.230`. nginx (`deploy/nginx-redirect.conf`) sends every `http://<sub>.datesin50states.com` to the apex. HTTPS redirects only work for names with a certificate, which is just `www` (`WITH_WWW=1`). Other subdomains redirect over http only.
+**Subdomains:** DNS is on Cloudflare (see *Photo storage*); add a wildcard A record, `*` → `138.197.22.230` (DNS only), if you want every subdomain to redirect. nginx (`deploy/nginx-redirect.conf`) sends every `http://<sub>.datesin50states.com` to the apex. HTTPS redirects only work for names with a certificate, which is just `www` (`WITH_WWW=1`). Other subdomains redirect over http only.
 
 **Every release:**
 
