@@ -1,6 +1,6 @@
 # Dates in 50 States
 
-Patrick & Susan's road-trip blog: one date in every state, by Class A motorhome.
+Patrick & Susan's road-trip blog: dates in every state, by Class A motorhome.
 
 - **Public:** a vintage map of the USA. States with at least one entry are colored and clickable, and each opens a "Greetings from…" page with its entries and photos.
 - **Authors:** Patrick and Susan sign in with Apple. Clicking any state opens an editor where they can write entries, drag in photos, or link an iCloud shared album. Nobody else can sign in.
@@ -72,6 +72,10 @@ The illustrations are a single committed set, generated once with Gemini (`gemin
 GEMINI_API_KEY=... node scripts/gen-state-art.js KY      # regenerate Kentucky
 GEMINI_API_KEY=... node scripts/gen-state-art.js         # fill in any missing states
 ```
+
+**On the state page**, the header uses the same illustration as a faded backdrop and fills the state stamp with it.
+
+**The map tour.** A faint ▶ in the map's bottom-right corner starts a tour: the map gently zooms to each entry's state in date order (oldest first) and loops. The ‹ date › control steps back and forth, clicking the date pauses or resumes, and × (or Esc) zooms back out.
 
 **On the home page**, the "Latest from the road" postcards slowly crossfade through each entry's photos, starting with the cover and showing up to 10.
 

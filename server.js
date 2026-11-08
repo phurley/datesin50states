@@ -121,7 +121,9 @@ app.get('/', (req, res) => {
     e.thumbs = list.slice(0, 10).map((p) => `/media/${p.thumb}`);
     if (!e.thumbs.length) e.thumbs = [views.stateArt(e.state)];
   }
-  res.send(views.mapPage({ author: req.author, counts: stateCounts(), photos: mapPhotos(), recent }));
+  // The map's "play" tour: every entry, oldest date first (undated last).
+  const tour = db.prepare('SELECT id, state, title, date FROM entries ORDER BY date IS NULL, date, id').all();
+  res.send(views.mapPage({ author: req.author, counts: stateCounts(), photos: mapPhotos(), recent, tour }));
 });
 
 app.get('/state/:code', (req, res) => {

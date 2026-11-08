@@ -93,6 +93,7 @@ img { max-width: 100%; }
   position: relative; background: var(--card); border-radius: 18px; padding: clamp(10px, 3vw, 28px);
   box-shadow: var(--shadow); border: 2px solid var(--paper-2);
 }
+.map-frame { position: relative; }
 .usa { display: block; width: 100%; height: auto; overflow: visible; }
 .usa .st path {
   fill: var(--unvisited); stroke: var(--unvisited-edge); stroke-width: 1.2; stroke-linejoin: round;
@@ -120,6 +121,49 @@ img { max-width: 100%; }
 }
 .map-tip small { display: block; font-weight: 400; opacity: .8; margin-top: 2px; }
 .map-tip::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: var(--ink); }
+/* Map tour: a barely-there play button, then a quiet ‹ date › control. */
+.usa.touring { overflow: hidden; }
+.usa .st { transition: opacity .9s ease; }
+.usa.touring .st:not(.tour-on) { opacity: .42; }
+.usa.touring .st.tour-on path { stroke: var(--ink); stroke-width: 1.6; }
+.usa .st path, .pin circle { vector-effect: non-scaling-stroke; }
+.pin { transition: opacity .9s ease; }
+.usa.touring .pin:not(.tour-on) { opacity: 0; }
+.tour-play {
+  position: absolute; right: 4px; bottom: 4px; width: 34px; height: 34px; border-radius: 50%;
+  border: 1.5px solid currentColor; background: transparent; color: var(--ink-soft); opacity: .28;
+  display: grid; place-items: center; padding: 0; cursor: pointer; transition: opacity .3s, background .3s;
+}
+.tour-play svg { width: 18px; height: 18px; fill: currentColor; margin-left: 2px; }
+.tour-play:hover, .tour-play:focus-visible { opacity: .7; background: rgba(245, 236, 215, .7); outline: none; }
+.tour-ctl {
+  position: absolute; right: 4px; bottom: 4px; display: flex; align-items: center; gap: 2px;
+  background: rgba(251, 246, 234, .86); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  border: 1px solid var(--paper-2); border-radius: 999px; padding: 3px 4px; color: var(--ink-soft);
+  box-shadow: 0 6px 18px -10px rgba(43, 33, 24, .45); opacity: .82; transition: opacity .3s;
+  animation: tour-in .5s ease;
+}
+.tour-ctl:hover, .tour-ctl:focus-within { opacity: 1; }
+.tour-ctl[hidden], .tour-play[hidden] { display: none; }
+@keyframes tour-in { from { opacity: 0; transform: translateY(6px); } }
+.tour-ctl button { border: 0; background: none; color: inherit; cursor: pointer; font: inherit; padding: 0; }
+.tour-prev, .tour-next, .tour-close { width: 30px; height: 30px; border-radius: 50%; font: 400 22px/1 var(--serif) !important; }
+.tour-close { font-size: 18px !important; opacity: .6; }
+.tour-prev:hover, .tour-next:hover, .tour-close:hover { background: var(--paper-2); }
+.tour-date { position: relative; display: grid; text-align: center; min-width: 128px; max-width: 220px; padding: 3px 10px 5px !important; border-radius: 10px; }
+.tour-date b { font: 600 14px/1.2 var(--sans); color: var(--ink); }
+.tour-date small { font: 12px/1.2 var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tour-date:hover { background: var(--paper-2); }
+.tour-ctl.paused .tour-date b::before { content: '❚❚ '; font-size: 9px; vertical-align: 2px; letter-spacing: -1px; opacity: .6; }
+.tour-bar { position: absolute; left: 12px; right: 12px; bottom: 1px; height: 2px; border-radius: 2px; background: var(--rust); opacity: .55; transform-origin: left; transform: scaleX(0); }
+.tour-ctl.running .tour-bar { animation: tour-bar var(--dwell, 4s) linear forwards; }
+@keyframes tour-bar { to { transform: scaleX(1); } }
+@media (max-width: 600px) {
+  .tour-play { right: 0; bottom: 0; }
+  .tour-ctl { right: 0; bottom: -6px; left: 0; justify-content: space-between; }
+  .tour-date { flex: 1; max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) { .tour-ctl { animation: none; } .usa .st, .pin { transition: none; } }
 .map-legend { font: 14px var(--sans); color: var(--ink-soft); text-align: center; margin: 14px 0 0; }
 .map-legend .key { display: inline-block; width: 14px; height: 14px; border-radius: 4px; background: var(--unvisited); vertical-align: -2px; margin: 0 4px 0 14px; }
 .map-legend .visited-key { background: linear-gradient(135deg, var(--rust) 0 33%, var(--mustard) 33% 66%, var(--teal) 66%); margin-left: 0; }
@@ -155,7 +199,15 @@ img { max-width: 100%; }
 .recent.empty { text-align: center; padding: 40px 0 10px; color: var(--ink-soft); font-family: var(--sans); }
 
 /* --- State page ----------------------------------------------------------- */
-.postcard-head { position: relative; padding: 18px 16px 0; overflow: hidden; }
+.postcard-head { position: relative; padding: 18px 16px 0; overflow: hidden; isolation: isolate; }
+/* The state's illustration as a faded backdrop; paper scrim keeps the big name readable. */
+.postcard-head::before {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background:
+    linear-gradient(90deg, var(--paper) 0%, rgba(245, 236, 215, .9) 35%, rgba(245, 236, 215, .55) 70%, rgba(245, 236, 215, .35) 100%),
+    linear-gradient(0deg, var(--paper) 0%, rgba(245, 236, 215, 0) 45%),
+    var(--art) center 40% / cover no-repeat;
+}
 .back { font: 600 14px var(--sans); text-decoration: none; display: inline-block; max-width: 980px; }
 .ph-inner { max-width: 980px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 0 28px; }
 .state-name {
@@ -171,7 +223,7 @@ img { max-width: 100%; }
   background: var(--card); border-radius: 8px; transform: rotate(4deg); box-shadow: var(--shadow);
   outline: 3px dashed var(--paper-2); outline-offset: -10px;
 }
-.state-stamp .silhouette { width: 72%; height: 72%; }
+.state-stamp .silhouette { width: 72%; height: 72%; filter: drop-shadow(0 1px 0 rgba(43, 33, 24, .35)); }
 .state-stamp path { fill: var(--teal); }
 .state-stamp span { position: absolute; bottom: 10px; right: 14px; font: 400 18px var(--slab); color: var(--rust); }
 .state-main { max-width: 860px; width: 100%; margin: 0 auto; padding: 28px 16px; }
@@ -211,6 +263,9 @@ img { max-width: 100%; }
   .entry h2 { padding-right: 70px; }
   .ph-inner { flex-direction: column-reverse; align-items: flex-start; }
   .state-stamp { width: 96px; position: absolute; right: 16px; top: 46px; }
+  .postcard-head::before {
+    background: linear-gradient(0deg, var(--paper) 0%, rgba(245, 236, 215, .82) 55%, rgba(245, 236, 215, .6) 100%), var(--art) center 40% / cover no-repeat;
+  }
 }
 
 /* --- Lightbox ------------------------------------------------------------- */
