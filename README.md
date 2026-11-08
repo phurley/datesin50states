@@ -27,6 +27,9 @@ npm run dev            # http://localhost:3050, data in ./data
 | `APPLE_CLIENT_ID` | — | Sign in with Apple **Services ID** (`com.datesin50states.signin`) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | Google OAuth web client. The Google button hides until both are set |
 | `AUTHOR_EMAILS` | `phurley@gmail.com:Patrick,sue.hurley@gmail.com:Susan` | Admins: no limits, the root map (`email:Name`, comma separated) |
+| `TYPESAFE_API_KEY` | — | Jev (typesafe.ai): checks names, addresses, and map text. Unset = no text checks |
+| `GOOGLE_VISION_API_KEY` | — | Cloud Vision SafeSearch: checks photos. Unset = no photo checks |
+| `TEXT_FLAG_AT` / `PHOTO_STRIKES_ALLOWED` | `0.6` / `10` | Jev score that refuses text; refused photos allowed before an account is blocked |
 | `FREE_PHOTO_LIMIT` / `FREE_PHOTO_BYTES` | `100` / `1572864` | Free-tier photos per map, and max stored size per photo |
 | `DEV_LOGIN` | off | `1` enables dev sign-in (non-production only) |
 
@@ -73,6 +76,16 @@ sudo -u dates env $(cat /etc/datesin50states.env | xargs) node scripts/authorize
 - **Invites:** on `/profile`, *Show an invite QR code* creates a link that works for 30 minutes (any number of people). Someone already on their own empty map moves over (the empty map is removed); someone whose own map has entries is asked to clear it first.
 - **Free tier:** 100 photos per map, each stored at no more than 1.5 MB (re-encoded to fit; at 2000px that rarely changes anything). Uploads and album syncs past the limit are skipped with a note. A map with an admin member has no limits.
 - **Profile:** name, map title (script and big lines), tagline, footer, address, members (remove), connected sign-ins, and account deletion. Deleting the last member deletes the map and its photos.
+
+## Moderation
+
+`lib/moderation.js`. Admins (Patrick and Susan) are never checked.
+
+- **Text:** display names (at sign-up and on the profile) and, on the profile, the map's address, titles, tagline, and footer are scored by [Jev](https://typesafe.ai) (`jev-latest`, one yes/no question per changed field, each judged on its own). A score of 0.6 or more refuses the save with "That … isn’t allowed here." Real place names like Dead Horse Point or Devils Tower pass; hate, slurs, sexual, and drug references don't. Random addresses come from curated word lists and aren't checked.
+- **Photos:** every upload (and every photo a classic iCloud album sync imports) is checked with Cloud Vision **SafeSearch** using its 640px thumbnail. `adult` or `violence` rated `LIKELY` or `VERY_LIKELY` refuses the photo: it's deleted and the uploader is told. (`racy` alone isn't refused, so beach photos are fine.)
+- **Strikes:** refused photos are logged per person in `moderation_events`. More than 10 blocks the account: its sessions end, sign-in shows "Account blocked", and partners on the same map are unaffected. `/admin` lists blocked accounts (with **Unblock**, which also clears their photo strikes) and recent flags.
+- **Failures:** if Jev or Vision is unreachable, content is allowed and the error is logged, so an outage doesn't stop uploads.
+- **Keys:** the Vision key belongs to the Google Cloud project `datesin50states` (same one as Google sign-in). It's restricted to the Cloud Vision API and to the server's IP (138.197.22.230), so it only works from the server. SafeSearch's first 1,000 images a month are free, then about $1.50 per 1,000.
 
 ## Photos
 

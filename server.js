@@ -13,6 +13,7 @@ import {
 import { storeImage, removeImage } from './lib/media.js';
 import { albumKind, collectionTitle, syncAlbum, isSyncing } from './lib/icloud.js';
 import { randomSlug, cleanSlug } from './lib/slugs.js';
+import { checkText, checkImage, recordFlag, strikeForPhotos } from './lib/moderation.js';
 import * as views from './lib/views.js';
 
 const app = express();
@@ -255,6 +256,9 @@ function finishSignIn(req, res, result) {
   const inviteToken = parseCookies(req)[INVITE_COOKIE];
   const invite = validInvite(inviteToken);
 
+  if (author?.blocked_at) {
+    return res.status(403).send(views.messagePage({ script: 'Road closed', title: 'Account blocked', body: 'This account has been blocked for uploading inappropriate photos.' }));
+  }
   if (author) {
     startSession(res, author.id);
     if (invite && invite.map_id !== author.map_id) return res.redirect(303, `/join/${invite.token}`);
@@ -291,10 +295,15 @@ app.get('/join', (req, res) => {
   res.send(views.joinCodePage({ name: pending.name, error: req.query.error }));
 });
 
-app.post('/join', form, formGuard, (req, res) => {
+app.post('/join', form, formGuard, async (req, res) => {
   const pending = pendingFor(req);
   if (!pending) return res.redirect(303, '/login?error=Your+sign-in+expired.+Try+again.');
   const name = String(req.body.name || '').trim().slice(0, 60) || 'Traveler';
+  const { flagged, scores } = await checkText({ name: { label: 'Display name', value: name } });
+  if (flagged.length) {
+    recordFlag({ kind: 'text', detail: { name, scores, at: 'join' } });
+    return res.redirect(303, `/join?error=${encodeURIComponent('Please choose a different name.')}`);
+  }
   const code = String(req.body.code || '').trim();
   const col = pending.provider === 'apple' ? 'apple_sub' : 'google_sub';
   let map;
@@ -375,11 +384,31 @@ function profileData(req) {
 
 app.get('/profile', requireSignedIn, (req, res) => res.send(views.profilePage(profileData(req))));
 
-app.post('/profile', requireSignedIn, form, formGuard, (req, res) => {
+// Public text people can set, with labels for messages and the moderation prompt.
+const PUBLIC_FIELDS = {
+  name: 'Display name', slug: 'Web address', title_script: 'Map title (small)', title: 'Map title (big)', tagline: 'Tagline', footer: 'Footer',
+};
+
+app.post('/profile', requireSignedIn, form, formGuard, async (req, res) => {
   const s = (k, max) => String(req.body[k] ?? '').trim().slice(0, max);
   const back = (q) => res.redirect(303, `/profile?${q}`);
   const name = s('name', 60);
   if (!name) return back('error=Your+name+can%E2%80%99t+be+empty.');
+  // Check only what changed (admins are trusted).
+  if (!req.author.admin) {
+    const current = { name: req.author.name, ...(req.author.map_id ? getMap(req.author.map_id) : {}) };
+    const changed = {};
+    for (const [k, label] of Object.entries(PUBLIC_FIELDS)) {
+      const v = k === 'slug' ? String(req.body.slug || '').toLowerCase().trim() : s(k, 200);
+      if (v && v !== String(current[k] ?? '')) changed[k] = { label, value: v };
+    }
+    const { flagged, scores } = await checkText(changed);
+    if (flagged.length) {
+      recordFlag({ authorId: req.author.id, mapId: req.author.map_id, kind: 'text', detail: { fields: Object.fromEntries(flagged.map((k) => [k, changed[k].value])), scores } });
+      const what = flagged.map((k) => PUBLIC_FIELDS[k].toLowerCase()).join(' and ');
+      return back(`error=${encodeURIComponent(`That ${what} isn’t allowed here. Please choose something else.`)}`);
+    }
+  }
   db.prepare('UPDATE authors SET name = ? WHERE id = ?').run(name, req.author.id);
   const map = req.author.map_id ? getMap(req.author.map_id) : null;
   if (map) {
@@ -461,9 +490,22 @@ app.get('/admin', requireAdmin, (req, res) => {
   const maps = db.prepare(`SELECT m.*,
       (SELECT GROUP_CONCAT(name, ', ') FROM authors WHERE map_id = m.id) AS members,
       (SELECT COUNT(*) FROM entries WHERE map_id = m.id) AS entries,
-      (SELECT COUNT(*) FROM photos p JOIN entries e ON e.id = p.entry_id WHERE e.map_id = m.id) AS photos
+      (SELECT COUNT(*) FROM photos p JOIN entries e ON e.id = p.entry_id WHERE e.map_id = m.id) AS photos,
+      (SELECT COUNT(*) FROM moderation_events WHERE map_id = m.id) AS flags
     FROM maps m ORDER BY m.is_root DESC, m.created_at DESC`).all();
-  res.send(views.adminPage({ author: req.author, codes, maps, msg: req.query.msg, error: req.query.error }));
+  const blocked = db.prepare(`SELECT a.id, a.name, a.blocked_at, a.block_reason, m.slug FROM authors a LEFT JOIN maps m ON m.id = a.map_id
+    WHERE a.blocked_at IS NOT NULL ORDER BY a.blocked_at DESC`).all();
+  const flags = db.prepare(`SELECT f.kind, f.detail, f.created_at, a.name, m.slug FROM moderation_events f
+    LEFT JOIN authors a ON a.id = f.author_id LEFT JOIN maps m ON m.id = f.map_id ORDER BY f.id DESC LIMIT 25`).all();
+  res.send(views.adminPage({ author: req.author, codes, maps, blocked, flags, msg: req.query.msg, error: req.query.error }));
+});
+
+app.post('/admin/unblock/:id', requireAdmin, form, formGuard, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare('UPDATE authors SET blocked_at = NULL, block_reason = NULL WHERE id = ?').run(id);
+  // Clear their photo strikes too, so one more flag doesn't re-block them immediately.
+  db.prepare("DELETE FROM moderation_events WHERE author_id = ? AND kind = 'photo'").run(id);
+  res.redirect(303, '/admin?msg=Unblocked.');
 });
 
 app.post('/admin/codes', requireAdmin, form, formGuard, (req, res) => {
@@ -514,10 +556,25 @@ api.get('/entries/:id', (req, res) => {
 });
 
 // Legacy shared albums get imported; newer shared collections just get their title for the link.
+// Moderation for a stored photo on behalf of an author: true = keep it. Flagged photos are
+// deleted and count toward the author's strikes. Admins are trusted.
+function photoGate(authorId) {
+  const a = authorId ? db.prepare('SELECT id, role, map_id FROM authors WHERE id = ?').get(authorId) : null;
+  if (!a || a.role === 'admin') return null;
+  return async (img) => {
+    const r = await checkImage(img.thumb);
+    if (!r.flagged) return true;
+    removeImage(img);
+    recordFlag({ authorId: a.id, mapId: a.map_id, kind: 'photo', detail: { reasons: r.reasons, safe: r.safe } });
+    strikeForPhotos(a.id);
+    return false;
+  };
+}
+
 function kickSync(id) {
-  const e = db.prepare('SELECT album_url, map_id FROM entries WHERE id = ?').get(id);
+  const e = db.prepare('SELECT album_url, map_id, author_id FROM entries WHERE id = ?').get(id);
   const kind = albumKind(e?.album_url);
-  if (kind === 'legacy') syncAlbum(id, mapLimits(e.map_id)).catch((err) => console.error('[icloud]', err));
+  if (kind === 'legacy') syncAlbum(id, { ...mapLimits(e.map_id), check: photoGate(e.author_id) }).catch((err) => console.error('[icloud]', err));
   if (kind === 'collection') {
     collectionTitle(e.album_url).then((t) => db.prepare('UPDATE entries SET album_title = ?, album_error = NULL WHERE id = ?').run(t, id));
   }
@@ -580,11 +637,20 @@ api.post('/entries/:id/photos', upload.array('photos', 30), async (req, res) => 
   const failed = [];
   let skipped = 0;
   let room = limits.remaining;
+  let refused = 0;
+  const gate = photoGate(req.author.id);
   let pos = e.photos.reduce((m, p) => Math.max(m, p.position), 0);
   for (const f of req.files || []) {
     if (room <= 0) { skipped++; continue; }
     try {
       const img = await storeImage(f.buffer, { maxBytes: limits.maxBytes });
+      if (gate && !(await gate(img))) {
+        refused++;
+        if (db.prepare('SELECT blocked_at FROM authors WHERE id = ?').get(req.author.id).blocked_at) {
+          return res.status(403).json({ error: 'This account has been blocked for uploading inappropriate photos.' });
+        }
+        continue;
+      }
       db.prepare(`INSERT INTO photos (entry_id, source, source_key, file, thumb, width, height, taken_at, position)
         VALUES (?, 'upload', ?, ?, ?, ?, ?, ?, ?)`)
         .run(e.id, img.file, img.file, img.thumb, img.width, img.height, img.takenAt, ++pos);
@@ -596,7 +662,10 @@ api.post('/entries/:id/photos', upload.array('photos', 30), async (req, res) => 
   }
   db.prepare(`UPDATE entries SET cover_photo_id = COALESCE(cover_photo_id,
     (SELECT id FROM photos WHERE entry_id = ? ORDER BY position LIMIT 1)) WHERE id = ?`).run(e.id, e.id);
-  const limitNote = skipped ? `Photo limit reached: ${skipped} not added (free maps hold ${limits.limit} photos).` : null;
+  const notes = [];
+  if (refused) notes.push(`${refused} ${refused === 1 ? 'photo wasn’t' : 'photos weren’t'} added because ${refused === 1 ? 'it looks' : 'they look'} inappropriate. Repeated inappropriate uploads will block the account.`);
+  if (skipped) notes.push(`Photo limit reached: ${skipped} not added (free maps hold ${limits.limit} photos).`);
+  const limitNote = notes.join(' ') || null;
   res.json({ entry: getEntry(e.id), failed, limitNote, limits: mapLimits(e.map_id) });
 });
 
