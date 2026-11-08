@@ -67,7 +67,7 @@
         h('div', { class: 't' }, h('b', {}, e.title), h('small', {}, `${fmtDate(e.date)} · ${e.photos.length} photos`)),
         h('button', { class: 'btn small ghost', onclick: () => openForm({ ...e, stateName: name }) }, 'Edit')))),
       h('div', { class: 'ed-actions' },
-        h('a', { href: `/state/${code.toLowerCase()}`, class: 'btn ghost' }, 'View page'),
+        h('a', { href: `${document.body.dataset.base || ''}/state/${code.toLowerCase()}`, class: 'btn ghost' }, 'View page'),
         h('div', { class: 'right' }, h('button', { class: 'btn', onclick: () => openForm({ state: code, stateName: name }) }, '＋ New entry'))));
   }
 
@@ -139,6 +139,7 @@
           const r = await api('POST', `/api/entries/${current.id}/photos`, fd);
           current = r.entry; dirty = true; renderPhotos();
           if (r.failed.length) say(`Couldn’t read: ${r.failed.join(', ')}`, true);
+          if (r.limitNote) return say(r.limitNote, true);
         } catch (e) { return say(e.message, true); }
       }
       say('Photos added.');

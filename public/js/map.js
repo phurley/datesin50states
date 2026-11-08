@@ -4,7 +4,7 @@
   const tip = document.querySelector('.map-tip');
   if (!svg || !tip) return;
   const card = svg.closest('.map-card');
-  const authed = Boolean(document.querySelector('.driver-bar'));
+  const authed = svg.dataset.canEdit === '1'; // this map's own authors
 
   function show(el, evt) {
     if (el.classList.contains('tour-future')) return hide(); // don't spoil the tour

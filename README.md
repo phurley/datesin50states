@@ -3,7 +3,8 @@
 Patrick & Susan's road-trip blog: dates in every state, by Class A motorhome.
 
 - **Public:** a vintage map of the USA. States with at least one entry are colored and clickable, and each opens a "Greetings from…" page with its entries and photos.
-- **Authors:** Patrick and Susan sign in with Apple. Clicking any state opens an editor where they can write entries, drag in photos, or link an iCloud shared album. Nobody else can sign in.
+- **Maps:** Patrick & Susan's map is the home page. Anyone with a join code can sign in (Apple or Google) and get their own map at a three-word address like `/rapid-crawling-elk/`. There's no search or directory of maps.
+- **Authors:** a map's members click any state to write entries, add photos, or link an iCloud shared album. Partners join a map by scanning a QR code from its profile page.
 
 Stack: Node 22+ / Express, SQLite (built-in `node:sqlite`), `sharp` for image resizing, server-rendered HTML with vanilla JS for the map and the editor. No build step.
 
@@ -24,7 +25,9 @@ npm run dev            # http://localhost:3050, data in ./data
 | `PORT` / `HOST` | `3050` / `127.0.0.1` | Listen address |
 | `DATA_DIR` | `./data` | SQLite DB (`dates.db`), `media/` photos, `backups/` |
 | `APPLE_CLIENT_ID` | — | Sign in with Apple **Services ID** (`com.datesin50states.signin`) |
-| `AUTHOR_EMAILS` | `phurley@gmail.com:Patrick,sue.hurley@gmail.com:Susan` | Who can write (`email:Name`, comma separated) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | — | Google OAuth web client. The Google button hides until both are set |
+| `AUTHOR_EMAILS` | `phurley@gmail.com:Patrick,sue.hurley@gmail.com:Susan` | Admins: no limits, the root map (`email:Name`, comma separated) |
+| `FREE_PHOTO_LIMIT` / `FREE_PHOTO_BYTES` | `100` / `1572864` | Free-tier photos per map, and max stored size per photo |
 | `DEV_LOGIN` | off | `1` enables dev sign-in (non-production only) |
 
 In production these live in `/etc/datesin50states.env` on the server.
@@ -38,13 +41,20 @@ These are already set up in Apple Developer (team `87EUDMJ2TV`):
 
 The site uses Apple's `form_post` flow and verifies the `id_token` against Apple's public keys (`appleid.apple.com/auth/keys`), checking issuer, audience = Services ID, and a per-login nonce. It never calls Apple's token endpoint, so **no private key or client secret is needed**.
 
-Who gets in:
+**Google** uses the standard authorization-code flow with PKCE (`/auth/google`, return URL `https://datesin50states.com/auth/google/callback`) and verifies the `id_token` against Google's keys. Create an OAuth *Web application* client in Google Cloud Console with that redirect URI and only the `openid email profile` scopes, then put `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `/etc/datesin50states.env` and restart.
 
-1. If the Apple user id (`sub`) is already bound to an author, they're signed in.
-2. Otherwise, if Apple returns a verified email on the allow-list, that author is bound to this `sub` on first sign-in.
-3. Anyone else sees "Not on the guest list", which shows their `sub`.
+Who gets in (`finishSignIn` in `server.js`):
 
-If an Apple ID uses *Hide My Email*, or its email isn't one of the Gmail addresses, the first sign-in is rejected and shows the `sub`. Bind it on the server:
+1. A known Apple or Google id signs in to its account.
+2. Patrick and Susan (admins in `AUTHOR_EMAILS`) are bound by verified email on their first sign-in with each provider. Email is never used to match anyone else.
+3. Someone who scanned a map's invite QR within 30 minutes joins that map.
+4. Anyone else is asked for a **join code**, then gets a new map with a random slug.
+
+Accounts are linked to a second provider from the profile page (Connect Apple / Connect Google), not by matching emails.
+
+Apple returns sign-ins as a cross-site POST, which doesn't carry our `SameSite=Lax` cookies, so `/auth/apple/callback` verifies the token and hands off to `/auth/finish/:token` (same-site) to finish.
+
+If an admin's Apple ID uses *Hide My Email*, bind it on the server:
 
 ```bash
 ssh root@datesin50states.com
@@ -52,6 +62,17 @@ cd /opt/datesin50states/current
 sudo -u dates env $(cat /etc/datesin50states.env | xargs) node scripts/authorize.js <sub> Susan
 sudo -u dates env $(cat /etc/datesin50states.env | xargs) node scripts/authorize.js --list
 ```
+
+`npm run dev` adds two dev sign-in buttons: one for Patrick or Susan, and one that creates a brand-new person, to test join codes and invites.
+
+## Maps, members, and limits
+
+- **Root map:** Patrick & Susan's, shown at `/` and also at its own slug. Its members are admins.
+- **Addresses:** new maps get `adjective-verb-animal` (`lib/slugs.js`, about 1.6M combinations). Members can rename the address on `/profile`; old addresses 301 to the new one (`slug_history`). App paths like `api`, `login`, `profile` are reserved. Unknown addresses are rate-limited per IP, and user maps carry `noindex`.
+- **Join codes** (`join_codes` table): case-insensitive, with optional max uses and expiry, and an on/off switch. `BlueWave2026` (100 uses, no expiry) is seeded. Admins manage codes and see every map at `/admin`.
+- **Invites:** on `/profile`, *Show an invite QR code* creates a link that works for 30 minutes (any number of people). Someone already on their own empty map moves over (the empty map is removed); someone whose own map has entries is asked to clear it first.
+- **Free tier:** 100 photos per map, each stored at no more than 1.5 MB (re-encoded to fit; at 2000px that rarely changes anything). Uploads and album syncs past the limit are skipped with a note. A map with an admin member has no limits.
+- **Profile:** name, map title (script and big lines), tagline, footer, address, members (remove), connected sign-ins, and account deletion. Deleting the last member deletes the map and its photos.
 
 ## Photos
 
