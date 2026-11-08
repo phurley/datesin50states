@@ -382,6 +382,11 @@ img { max-width: 100%; }
 .members form { margin: 0; }
 .tag { display: inline-block; font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; background: var(--teal); color: #fff; border-radius: 999px; padding: 2px 8px; vertical-align: 1px; }
 .usage { margin: 8px 0; }
+.tag.pending { background: var(--mustard); color: var(--ink); }
+.collection-of { font: 500 15px var(--sans); color: var(--ink-soft); margin: 8px 0 0; }
+.collection-of a { color: var(--rust); }
+.entry .from { color: var(--teal); }
+.driver-bar .invites-link { background: var(--mustard); color: var(--ink) !important; opacity: 1 !important; border-radius: 999px; padding: 2px 10px; font-weight: 600; }
 .meter { height: 10px; background: var(--paper-2); border-radius: 999px; overflow: hidden; }
 .meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--mustard), var(--orange), var(--rust)); }
 .danger-zone { border: 2px solid #f0cfc3; }

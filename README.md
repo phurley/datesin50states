@@ -77,6 +77,16 @@ sudo -u dates env $(cat /etc/datesin50states.env | xargs) node scripts/authorize
 - **Free tier:** 100 photos per map, each stored at no more than 1.5 MB (re-encoded to fit; at 2000px that rarely changes anything). Uploads and album syncs past the limit are skipped with a note. A map with an admin member has no limits.
 - **Profile:** name, map title (script and big lines), tagline, footer, address, members (remove), connected sign-ins, and account deletion. Deleting the last member deletes the map and its photos.
 
+## Collections
+
+A collection is a page that shows several maps together, e.g. `/the-road-crew/` combining your map and friends' maps. It's a row in `maps` with `kind = 'collection'`, so it has its own address (same namespace and rename-redirects as maps), titles, tagline, and footer, and goes through the same moderation.
+
+- **Create:** *＋ New collection* on the profile (up to 20 per map, only to limit abuse). The creating map is its first member, and that map's people manage it at `/collections/:id`.
+- **Add a map:** type (or paste a link to) the other map's address. It's added as *pending* in `collection_members` and doesn't show until someone on that map approves. Pending invitations show as **Invites (n)** in the top bar, and signing in goes straight to `/invites` (Approve / Decline). A member map can leave from its profile; the owner can remove maps or cancel invitations.
+- **Display:** a collection's map, postcards, tour, and state pages combine all active members' entries; state pages note which map each entry is from. Each member's map page is unchanged.
+- **Writing:** a member signed in on a collection page can click states to write, but entries always go to their own map (the API only ever writes to the caller's map). Edit buttons appear only on their own entries.
+- Deleting a collection removes only the page; deleting a map removes the collections it owns.
+
 ## Moderation
 
 `lib/moderation.js`. Admins (Patrick and Susan) are never checked.

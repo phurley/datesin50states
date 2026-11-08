@@ -47,7 +47,15 @@ const now = () => new Date().toISOString();
 const getMap = (id) => db.prepare('SELECT * FROM maps WHERE id = ?').get(id);
 const mapBase = (m) => (m.is_root ? '' : `/${m.slug}`);
 const mapUrl = (m) => `${mapBase(m)}/`;
-const canEdit = (req, m) => Boolean(req.author && req.author.map_id === m.id);
+// The maps whose entries a page shows: a map shows itself; a collection shows its active members.
+function scopeIds(m) {
+  if (m.kind !== 'collection') return [m.id];
+  return db.prepare("SELECT map_id FROM collection_members WHERE collection_id = ? AND status = 'active'").all(m.id).map((r) => r.map_id);
+}
+const IN = (ids) => (ids.length ? ids.map(() => '?').join(',') : 'NULL');
+// Signed-in people can write from a map's page, or from a collection their map is active in.
+// Writes always go to their own map (the API is scoped to it).
+const canEdit = (req, m, ids = scopeIds(m)) => Boolean(req.author?.map_id && ids.includes(req.author.map_id));
 
 // Admin-backed maps have no limits; everyone else is on the free tier.
 function mapLimits(mapId) {
@@ -82,25 +90,26 @@ function deleteMap(mapId) {
 const VALID_STATE = (code) => Boolean(views.STATE_BY_CODE[String(code || '').toUpperCase()]);
 
 // One photo per visited state for the map: the chosen one, else the newest entry's cover, else any photo.
-function mapPhotos(mapId) {
+function mapPhotos(ids) {
+  const q = IN(ids);
   const rows = db.prepare(`
     SELECT e.state,
       COALESCE(
-        (SELECT p.thumb FROM state_photos sp JOIN photos p ON p.id = sp.photo_id WHERE sp.map_id = e.map_id AND sp.state = e.state),
+        (SELECT p.thumb FROM state_photos sp JOIN photos p ON p.id = sp.photo_id WHERE sp.map_id IN (${q}) AND sp.state = e.state ORDER BY sp.rowid DESC LIMIT 1),
         (SELECT p.thumb FROM entries e2 JOIN photos p ON p.id = e2.cover_photo_id
-           WHERE e2.map_id = e.map_id AND e2.state = e.state ORDER BY COALESCE(e2.date, e2.created_at) DESC, e2.id DESC LIMIT 1),
+           WHERE e2.map_id IN (${q}) AND e2.state = e.state ORDER BY COALESCE(e2.date, e2.created_at) DESC, e2.id DESC LIMIT 1),
         (SELECT p.thumb FROM entries e3 JOIN photos p ON p.entry_id = e3.id
-           WHERE e3.map_id = e.map_id AND e3.state = e.state ORDER BY COALESCE(e3.date, e3.created_at) DESC, p.position LIMIT 1)
+           WHERE e3.map_id IN (${q}) AND e3.state = e.state ORDER BY COALESCE(e3.date, e3.created_at) DESC, p.position LIMIT 1)
       ) AS thumb
-    FROM entries e WHERE e.map_id = ? GROUP BY e.state`).all(mapId);
+    FROM entries e WHERE e.map_id IN (${q}) GROUP BY e.state`).all(...ids, ...ids, ...ids, ...ids);
   const out = {};
   for (const r of rows) out[r.state] = r.thumb ? `/media/${r.thumb}` : views.stateArt(r.state);
   return out;
 }
 
-function stateCounts(mapId) {
+function stateCounts(ids) {
   const out = {};
-  for (const r of db.prepare('SELECT state, COUNT(*) AS n FROM entries WHERE map_id = ? GROUP BY state').all(mapId)) out[r.state] = r.n;
+  for (const r of db.prepare(`SELECT state, COUNT(*) AS n FROM entries WHERE map_id IN (${IN(ids)}) GROUP BY state`).all(...ids)) out[r.state] = r.n;
   return out;
 }
 
@@ -113,9 +122,11 @@ function photosFor(entryIds) {
   return by;
 }
 
-function entriesFor(mapId, state) {
-  const entries = db.prepare(`SELECT e.*, a.name AS author_name FROM entries e LEFT JOIN authors a ON a.id = e.author_id
-    WHERE e.map_id = ? AND e.state = ? ORDER BY COALESCE(e.date, e.created_at) DESC, e.id DESC`).all(mapId, state).map((e) => ({ ...e }));
+function entriesFor(ids, state) {
+  ids = [].concat(ids);
+  const entries = db.prepare(`SELECT e.*, a.name AS author_name, m.slug AS map_slug, m.is_root AS map_is_root, m.title_script AS map_title_script, m.title AS map_title
+    FROM entries e LEFT JOIN authors a ON a.id = e.author_id JOIN maps m ON m.id = e.map_id
+    WHERE e.map_id IN (${IN(ids)}) AND e.state = ? ORDER BY COALESCE(e.date, e.created_at) DESC, e.id DESC`).all(...ids, state).map((e) => ({ ...e }));
   const photos = photosFor(entries.map((e) => e.id));
   for (const e of entries) {
     e.photos = photos[e.id] || [];
@@ -154,8 +165,9 @@ function cleanEntry(body) {
 // --- Map pages -----------------------------------------------------------------
 
 function renderMap(req, res, map) {
+  const ids = scopeIds(map);
   const recent = db.prepare(`SELECT e.id, e.state, e.title, e.date, e.cover_photo_id
-    FROM entries e WHERE e.map_id = ? ORDER BY COALESCE(e.date, e.created_at) DESC, e.id DESC LIMIT 6`).all(map.id).map((e) => ({ ...e }));
+    FROM entries e WHERE e.map_id IN (${IN(ids)}) ORDER BY COALESCE(e.date, e.created_at) DESC, e.id DESC LIMIT 6`).all(...ids).map((e) => ({ ...e }));
   // Postcard slideshows: cover first, then the rest in order, capped to keep the page light.
   const photos = photosFor(recent.map((e) => e.id));
   for (const e of recent) {
@@ -165,20 +177,21 @@ function renderMap(req, res, map) {
     if (!e.thumbs.length) e.thumbs = [views.stateArt(e.state)];
   }
   // The map's "play" tour: every entry, oldest date first (undated last).
-  const tour = db.prepare('SELECT id, state, title, date FROM entries WHERE map_id = ? ORDER BY date IS NULL, date, id').all(map.id);
+  const tour = db.prepare(`SELECT id, state, title, date FROM entries WHERE map_id IN (${IN(ids)}) ORDER BY date IS NULL, date, id`).all(...ids);
   res.send(views.mapPage({
-    author: req.author, map, base: mapBase(map), canEdit: canEdit(req, map), welcome: 'welcome' in req.query,
-    counts: stateCounts(map.id), photos: mapPhotos(map.id), recent, tour,
+    author: req.author, map, base: mapBase(map), canEdit: canEdit(req, map, ids), welcome: 'welcome' in req.query,
+    counts: stateCounts(ids), photos: mapPhotos(ids), recent, tour, members: collectionMembers(map),
   }));
 }
 
 function renderState(req, res, map) {
   const state = views.STATE_BY_CODE[req.params.code.toUpperCase()];
   if (!state) return res.status(404).send(views.notFoundPage({ author: req.author }));
-  const entries = entriesFor(map.id, state.code);
+  const ids = scopeIds(map);
+  const entries = entriesFor(ids, state.code);
   // States without entries are only open to the map's own authors.
-  if (!entries.length && !canEdit(req, map)) return res.redirect(mapUrl(map));
-  res.send(views.statePage({ author: req.author, map, base: mapBase(map), canEdit: canEdit(req, map), state, entries }));
+  if (!entries.length && !canEdit(req, map, ids)) return res.redirect(mapUrl(map));
+  res.send(views.statePage({ author: req.author, map, base: mapBase(map), canEdit: canEdit(req, map, ids), state, entries }));
 }
 
 app.get('/', (req, res) => renderMap(req, res, getMap(ROOT_MAP_ID)));
@@ -262,6 +275,10 @@ function finishSignIn(req, res, result) {
   if (author) {
     startSession(res, author.id);
     if (invite && invite.map_id !== author.map_id) return res.redirect(303, `/join/${invite.token}`);
+    // Collection invitations wait for approval at sign-in.
+    if (author.map_id && db.prepare("SELECT 1 FROM collection_members WHERE map_id = ? AND status = 'pending'").get(author.map_id)) {
+      return res.redirect(303, '/invites');
+    }
     return res.redirect(303, author.map_id ? mapUrl(getMap(author.map_id)) : '/profile');
   }
 
@@ -374,6 +391,10 @@ function profileData(req) {
     map,
     base: map ? mapBase(map) : '',
     members: map ? db.prepare('SELECT id, name, role FROM authors WHERE map_id = ? ORDER BY id').all(map.id) : [],
+    collections: map ? db.prepare(`SELECT c.id, c.slug, c.title_script, c.title, c.owner_map_id, cm.status,
+        (SELECT COUNT(*) FROM collection_members x WHERE x.collection_id = c.id AND x.status = 'active') AS active
+      FROM collection_members cm JOIN maps c ON c.id = cm.collection_id
+      WHERE cm.map_id = ? ORDER BY c.owner_map_id = ? DESC, c.created_at`).all(map.id, map.id) : [],
     limits: map ? mapLimits(map.id) : null,
     appleReady: Boolean(config.appleClientId),
     googleReady: googleReady(),
@@ -389,44 +410,179 @@ const PUBLIC_FIELDS = {
   name: 'Display name', slug: 'Web address', title_script: 'Map title (small)', title: 'Map title (big)', tagline: 'Tagline', footer: 'Footer',
 };
 
-app.post('/profile', requireSignedIn, form, formGuard, async (req, res) => {
-  const s = (k, max) => String(req.body[k] ?? '').trim().slice(0, max);
-  const back = (q) => res.redirect(303, `/profile?${q}`);
-  const name = s('name', 60);
-  if (!name) return back('error=Your+name+can%E2%80%99t+be+empty.');
-  // Check only what changed (admins are trusted).
-  if (!req.author.admin) {
-    const current = { name: req.author.name, ...(req.author.map_id ? getMap(req.author.map_id) : {}) };
-    const changed = {};
-    for (const [k, label] of Object.entries(PUBLIC_FIELDS)) {
-      const v = k === 'slug' ? String(req.body.slug || '').toLowerCase().trim() : s(k, 200);
-      if (v && v !== String(current[k] ?? '')) changed[k] = { label, value: v };
-    }
-    const { flagged, scores } = await checkText(changed);
-    if (flagged.length) {
-      recordFlag({ authorId: req.author.id, mapId: req.author.map_id, kind: 'text', detail: { fields: Object.fromEntries(flagged.map((k) => [k, changed[k].value])), scores } });
-      const what = flagged.map((k) => PUBLIC_FIELDS[k].toLowerCase()).join(' and ');
-      return back(`error=${encodeURIComponent(`That ${what} isn’t allowed here. Please choose something else.`)}`);
-    }
+// Moderate the public text that changed (admins are trusted). Returns an error message or null.
+async function moderateText(req, current, fields) {
+  if (req.author.admin) return null;
+  const changed = {};
+  for (const k of fields) {
+    const raw = String(req.body[k] ?? '').trim().slice(0, 200);
+    const v = k === 'slug' ? raw.toLowerCase() : raw;
+    if (v && v !== String(current[k] ?? '')) changed[k] = { label: PUBLIC_FIELDS[k], value: v };
   }
-  db.prepare('UPDATE authors SET name = ? WHERE id = ?').run(name, req.author.id);
+  const { flagged, scores } = await checkText(changed);
+  if (!flagged.length) return null;
+  recordFlag({ authorId: req.author.id, mapId: req.author.map_id, kind: 'text', detail: { fields: Object.fromEntries(flagged.map((k) => [k, changed[k].value])), scores } });
+  return `That ${flagged.map((k) => PUBLIC_FIELDS[k].toLowerCase()).join(' and ')} isn’t allowed here. Please choose something else.`;
+}
+
+// Save a map's (or collection's) address and text from a form. Returns an error message or null.
+function saveMapSettings(body, map) {
+  const s = (k, max) => String(body[k] ?? '').trim().slice(0, max);
+  const { slug, error } = cleanSlug(body.slug);
+  if (error) return error;
+  if (slug !== map.slug) {
+    const taken = db.prepare('SELECT 1 FROM maps WHERE slug = ? UNION SELECT 1 FROM slug_history WHERE slug = ? AND map_id != ?').get(slug, slug, map.id);
+    if (taken) return 'That address is taken. Try another.';
+    tx(() => {
+      db.prepare('DELETE FROM slug_history WHERE slug = ?').run(slug);
+      db.prepare('INSERT OR REPLACE INTO slug_history (slug, map_id) VALUES (?, ?)').run(map.slug, map.id);
+      db.prepare('UPDATE maps SET slug = ? WHERE id = ?').run(slug, map.id);
+    });
+  }
+  db.prepare('UPDATE maps SET title_script = ?, title = ?, tagline = ?, footer = ? WHERE id = ?')
+    .run(s('title_script', 40) || 'Dates in', s('title', 40) || '50 States', s('tagline', 200), s('footer', 200), map.id);
+  return null;
+}
+
+const MAP_TEXT = ['slug', 'title_script', 'title', 'tagline', 'footer'];
+
+app.post('/profile', requireSignedIn, form, formGuard, async (req, res) => {
+  const back = (q) => res.redirect(303, `/profile?${q}`);
+  const name = String(req.body.name ?? '').trim().slice(0, 60);
+  if (!name) return back('error=Your+name+can%E2%80%99t+be+empty.');
   const map = req.author.map_id ? getMap(req.author.map_id) : null;
+  const bad = await moderateText(req, { name: req.author.name, ...(map || {}) }, map ? ['name', ...MAP_TEXT] : ['name']);
+  if (bad) return back(`error=${encodeURIComponent(bad)}`);
+  db.prepare('UPDATE authors SET name = ? WHERE id = ?').run(name, req.author.id);
   if (map) {
-    const { slug, error } = cleanSlug(req.body.slug);
-    if (error) return back(`error=${encodeURIComponent(error)}`);
-    if (slug !== map.slug) {
-      const taken = db.prepare('SELECT 1 FROM maps WHERE slug = ? UNION SELECT 1 FROM slug_history WHERE slug = ? AND map_id != ?').get(slug, slug, map.id);
-      if (taken) return back(`error=${encodeURIComponent('That address is taken. Try another.')}`);
-      tx(() => {
-        db.prepare('DELETE FROM slug_history WHERE slug = ?').run(slug);
-        db.prepare('INSERT OR REPLACE INTO slug_history (slug, map_id) VALUES (?, ?)').run(map.slug, map.id);
-        db.prepare('UPDATE maps SET slug = ? WHERE id = ?').run(slug, map.id);
-      });
-    }
-    db.prepare('UPDATE maps SET title_script = ?, title = ?, tagline = ?, footer = ? WHERE id = ?')
-      .run(s('title_script', 40) || 'Dates in', s('title', 40) || '50 States', s('tagline', 200), s('footer', 200), map.id);
+    const err = saveMapSettings(req.body, map);
+    if (err) return back(`error=${encodeURIComponent(err)}`);
   }
   back('msg=Saved.');
+});
+
+// --- Collections -----------------------------------------------------------------
+// A collection shows several maps together. Members of the map that created it manage it;
+// other maps are added by their address and join once one of their people approves.
+
+const MAX_COLLECTIONS = 20; // per map, only to limit abuse
+
+// "Alice & Bob" for a map, from its people.
+const mapPeople = (mapId) => db.prepare('SELECT name FROM authors WHERE map_id = ? ORDER BY id').all(mapId).map((a) => a.name).join(' & ') || 'Someone';
+
+// Active members of a collection, for its page header. Null for ordinary maps.
+function collectionMembers(map) {
+  if (map.kind !== 'collection') return null;
+  return db.prepare(`SELECT m.id, m.slug, m.is_root FROM collection_members cm JOIN maps m ON m.id = cm.map_id
+    WHERE cm.collection_id = ? AND cm.status = 'active' ORDER BY cm.created_at`).all(map.id)
+    .map((m) => ({ ...m, people: mapPeople(m.id), url: mapUrl(m) }));
+}
+
+// The collection, if the signed-in person's map owns it.
+function ownCollection(req) {
+  const c = getMap(Number(req.params.id));
+  return c && c.kind === 'collection' && req.author?.map_id && c.owner_map_id === req.author.map_id ? c : null;
+}
+
+app.post('/collections', requireSignedIn, form, formGuard, (req, res) => {
+  const mine = req.author.map_id;
+  if (!mine) return res.redirect(303, '/profile');
+  const n = db.prepare("SELECT COUNT(*) AS n FROM maps WHERE kind = 'collection' AND owner_map_id = ?").get(mine).n;
+  if (n >= MAX_COLLECTIONS) return res.redirect(303, `/profile?error=${encodeURIComponent(`A map can have up to ${MAX_COLLECTIONS} collections.`)}`);
+  let slug;
+  do slug = randomSlug(); while (db.prepare('SELECT 1 FROM maps WHERE slug = ? UNION SELECT 1 FROM slug_history WHERE slug = ?').get(slug, slug));
+  const id = tx(() => {
+    const r = db.prepare(`INSERT INTO maps (slug, kind, owner_map_id, tagline, footer) VALUES (?, 'collection', ?, ?, ?)`)
+      .run(slug, mine, 'Dates in every state, together.', `A collection by ${mapPeople(mine)}`);
+    const cid = Number(r.lastInsertRowid);
+    db.prepare("INSERT INTO collection_members (collection_id, map_id, status, added_by) VALUES (?, ?, 'active', ?)").run(cid, mine, req.author.id);
+    return cid;
+  });
+  res.redirect(303, `/collections/${id}`);
+});
+
+function collectionData(req, c) {
+  return {
+    author: req.author,
+    c,
+    members: db.prepare(`SELECT m.id, m.slug, m.is_root, cm.status FROM collection_members cm JOIN maps m ON m.id = cm.map_id
+      WHERE cm.collection_id = ? ORDER BY cm.status = 'active' DESC, cm.created_at`).all(c.id)
+      .map((m) => ({ ...m, people: mapPeople(m.id), owner: m.id === c.owner_map_id })),
+    msg: req.query.msg,
+    error: req.query.error,
+  };
+}
+
+app.get('/collections/:id', requireSignedIn, (req, res) => {
+  const c = ownCollection(req);
+  if (!c) return res.status(404).send(views.notFoundPage({ author: req.author }));
+  res.send(views.collectionPage(collectionData(req, c)));
+});
+
+app.post('/collections/:id', requireSignedIn, form, formGuard, async (req, res) => {
+  const c = ownCollection(req);
+  if (!c) return res.status(404).send(views.notFoundPage({ author: req.author }));
+  const back = (q) => res.redirect(303, `/collections/${c.id}?${q}`);
+  const bad = await moderateText(req, c, MAP_TEXT);
+  if (bad) return back(`error=${encodeURIComponent(bad)}`);
+  const err = saveMapSettings(req.body, c);
+  back(err ? `error=${encodeURIComponent(err)}` : 'msg=Saved.');
+});
+
+app.post('/collections/:id/members', requireSignedIn, form, formGuard, (req, res) => {
+  const c = ownCollection(req);
+  if (!c) return res.status(404).send(views.notFoundPage({ author: req.author }));
+  const back = (q) => res.redirect(303, `/collections/${c.id}?${q}`);
+  // Accept a bare address or a pasted link like https://datesin50states.com/rapid-crawling-elk/
+  const slug = String(req.body.slug || '').trim().toLowerCase().replace(/^https?:\/\/[^/]+/, '').replace(/^\/+|\/+$/g, '').split('/')[0];
+  const target = db.prepare("SELECT * FROM maps WHERE slug = ? AND kind = 'map'").get(slug)
+    || db.prepare("SELECT m.* FROM slug_history h JOIN maps m ON m.id = h.map_id WHERE h.slug = ? AND m.kind = 'map'").get(slug);
+  if (!target) {
+    if (slugMiss(req)) return back('error=Slow+down+a+little.');
+    return back(`error=${encodeURIComponent('No map has that address. Check the spelling (it looks like rapid-crawling-elk).')}`);
+  }
+  const r = db.prepare('INSERT OR IGNORE INTO collection_members (collection_id, map_id, status, added_by) VALUES (?, ?, ?, ?)')
+    .run(c.id, target.id, 'pending', req.author.id);
+  back(r.changes ? `msg=${encodeURIComponent(`Invited ${mapPeople(target.id)}. They’ll appear once they approve.`)}` : 'msg=Already+in+this+collection.');
+});
+
+app.post('/collections/:id/members/:mapId/remove', requireSignedIn, form, formGuard, (req, res) => {
+  const c = ownCollection(req);
+  if (!c) return res.status(404).send(views.notFoundPage({ author: req.author }));
+  const mapId = Number(req.params.mapId);
+  if (mapId !== c.owner_map_id) db.prepare('DELETE FROM collection_members WHERE collection_id = ? AND map_id = ?').run(c.id, mapId);
+  res.redirect(303, `/collections/${c.id}?msg=Removed.`);
+});
+
+app.post('/collections/:id/delete', requireSignedIn, form, formGuard, (req, res) => {
+  const c = ownCollection(req);
+  if (!c) return res.status(404).send(views.notFoundPage({ author: req.author }));
+  db.prepare("DELETE FROM maps WHERE id = ? AND kind = 'collection'").run(c.id);
+  res.redirect(303, '/profile?msg=Collection+deleted.');
+});
+
+// Invitations to collections, for the signed-in person's map.
+app.get('/invites', requireSignedIn, (req, res) => {
+  const invites = req.author.map_id ? db.prepare(`SELECT c.id, c.slug, c.title_script, c.title, c.tagline, c.owner_map_id, a.name AS added_by
+    FROM collection_members cm JOIN maps c ON c.id = cm.collection_id LEFT JOIN authors a ON a.id = cm.added_by
+    WHERE cm.map_id = ? AND cm.status = 'pending' ORDER BY cm.created_at`).all(req.author.map_id)
+    .map((i) => ({ ...i, owner: mapPeople(i.owner_map_id) })) : [];
+  if (!invites.length) return res.redirect('/profile');
+  res.send(views.invitesPage({ author: req.author, invites }));
+});
+
+app.post('/invites/:id/:action', requireSignedIn, form, formGuard, (req, res) => {
+  const id = Number(req.params.id);
+  const mine = req.author.map_id;
+  if (req.params.action === 'accept') {
+    db.prepare("UPDATE collection_members SET status = 'active' WHERE collection_id = ? AND map_id = ? AND status = 'pending'").run(id, mine);
+    const c = getMap(id);
+    return res.redirect(303, c ? mapUrl(c) : '/profile');
+  }
+  // decline (pending) or leave (active); the owner map can't leave its own collection
+  db.prepare('DELETE FROM collection_members WHERE collection_id = ? AND map_id = ? AND map_id != (SELECT owner_map_id FROM maps WHERE id = ?)').run(id, mine, id);
+  const more = db.prepare("SELECT 1 FROM collection_members WHERE map_id = ? AND status = 'pending'").get(mine);
+  res.redirect(303, req.params.action === 'decline' && more ? '/invites' : '/profile?msg=Done.');
 });
 
 // A QR invite to this map, good for 30 minutes.
@@ -492,7 +648,7 @@ app.get('/admin', requireAdmin, (req, res) => {
       (SELECT COUNT(*) FROM entries WHERE map_id = m.id) AS entries,
       (SELECT COUNT(*) FROM photos p JOIN entries e ON e.id = p.entry_id WHERE e.map_id = m.id) AS photos,
       (SELECT COUNT(*) FROM moderation_events WHERE map_id = m.id) AS flags
-    FROM maps m ORDER BY m.is_root DESC, m.created_at DESC`).all();
+    FROM maps m ORDER BY m.is_root DESC, m.kind, m.created_at DESC`).all();
   const blocked = db.prepare(`SELECT a.id, a.name, a.blocked_at, a.block_reason, m.slug FROM authors a LEFT JOIN maps m ON m.id = a.map_id
     WHERE a.blocked_at IS NOT NULL ORDER BY a.blocked_at DESC`).all();
   const flags = db.prepare(`SELECT f.kind, f.detail, f.created_at, a.name, m.slug FROM moderation_events f
@@ -547,7 +703,7 @@ function ownPhoto(req, id) {
 api.get('/states/:code/entries', (req, res) => {
   const code = req.params.code.toUpperCase();
   if (!VALID_STATE(code)) return res.status(404).json({ error: 'Unknown state.' });
-  res.json({ entries: entriesFor(req.author.map_id, code) });
+  res.json({ entries: entriesFor([req.author.map_id], code) });
 });
 
 api.get('/entries/:id', (req, res) => {
