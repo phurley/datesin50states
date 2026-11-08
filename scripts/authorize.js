@@ -5,7 +5,7 @@ import { db } from '../lib/db.js';
 
 const [sub, name] = process.argv.slice(2);
 if (!sub || sub === '--list') {
-  console.table(db.prepare('SELECT id, name, email, apple_sub FROM authors').all());
+  console.table(db.prepare('SELECT a.id, a.name, a.email, a.role, m.slug AS map, a.apple_sub, a.google_sub FROM authors a LEFT JOIN maps m ON m.id = a.map_id').all());
   process.exit(0);
 }
 const author = db.prepare('SELECT id FROM authors WHERE name = ?').get(name);

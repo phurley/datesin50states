@@ -5,7 +5,9 @@
   "description": "Patrick & Susan's road-trip blog: dates in all 50 states",
   "type": "module",
   "main": "server.js",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development DEV_LOGIN=1 node --watch server.js",
@@ -17,6 +19,7 @@
     "jose": "^5.9.6",
     "marked": "^15.0.6",
     "multer": "^2.0.2",
+    "qrcode": "^1.5.4",
     "sanitize-html": "^2.14.0",
     "sharp": "^0.33.5"
   },
