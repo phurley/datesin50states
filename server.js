@@ -183,6 +183,8 @@ function renderState(req, res, map) {
 app.get('/', (req, res) => renderMap(req, res, getMap(ROOT_MAP_ID)));
 app.get('/state/:code', (req, res) => renderState(req, res, getMap(ROOT_MAP_ID)));
 
+app.get('/privacy', (req, res) => res.send(views.privacyPage({ author: req.author })));
+
 // --- Sign-in -------------------------------------------------------------------
 
 app.get('/login', (req, res) => {
