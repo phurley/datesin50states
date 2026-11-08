@@ -11,6 +11,7 @@ import {
   appleRedirect, appleCallback, googleReady, googleRedirect, googleCallback, INVITE_COOKIE, PENDING_COOKIE,
 } from './lib/auth.js';
 import { storeImage, removeImage } from './lib/media.js';
+import { commitImage, mediaUrl } from './lib/storage.js';
 import { albumKind, collectionTitle, syncAlbum, isSyncing } from './lib/icloud.js';
 import { randomSlug, cleanSlug } from './lib/slugs.js';
 import { checkText, checkImage, recordFlag, strikeForPhotos } from './lib/moderation.js';
@@ -103,7 +104,7 @@ function mapPhotos(ids) {
       ) AS thumb
     FROM entries e WHERE e.map_id IN (${q}) GROUP BY e.state`).all(...ids, ...ids, ...ids, ...ids);
   const out = {};
-  for (const r of rows) out[r.state] = r.thumb ? `/media/${r.thumb}` : views.stateArt(r.state);
+  for (const r of rows) out[r.state] = r.thumb ? mediaUrl(r.thumb) : views.stateArt(r.state);
   return out;
 }
 
@@ -173,7 +174,7 @@ function renderMap(req, res, map) {
   for (const e of recent) {
     const list = photos[e.id] || [];
     list.sort((a, b) => (b.id === e.cover_photo_id) - (a.id === e.cover_photo_id));
-    e.thumbs = list.slice(0, 10).map((p) => `/media/${p.thumb}`);
+    e.thumbs = list.slice(0, 10).map((p) => mediaUrl(p.thumb));
     if (!e.thumbs.length) e.thumbs = [views.stateArt(e.state)];
   }
   // The map's "play" tour: every entry, oldest date first (undated last).
@@ -807,6 +808,7 @@ api.post('/entries/:id/photos', upload.array('photos', 30), async (req, res) => 
         }
         continue;
       }
+      await commitImage(img);
       db.prepare(`INSERT INTO photos (entry_id, source, source_key, file, thumb, width, height, taken_at, position)
         VALUES (?, 'upload', ?, ?, ?, ?, ?, ?, ?)`)
         .run(e.id, img.file, img.file, img.thumb, img.width, img.height, img.takenAt, ++pos);

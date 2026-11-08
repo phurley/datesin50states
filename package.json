@@ -15,6 +15,7 @@
     "authorize": "node scripts/authorize.js"
   },
   "dependencies": {
+    "aws4fetch": "^1.0.20",
     "express": "^4.21.2",
     "jose": "^5.9.6",
     "marked": "^15.0.6",

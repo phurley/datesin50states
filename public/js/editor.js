@@ -104,7 +104,7 @@
         : current?.album_error ? `Album sync failed: ${current.album_error}`
           : current?.album_synced_at ? `Album last synced ${current.album_synced_at} UTC` : '';
       photosEl.replaceChildren(...(current?.photos || []).map((p) => h('div', { class: `ed-photo${p.id === current.cover_photo_id ? ' cover' : ''}` },
-        h('img', { src: `/media/${p.thumb}`, alt: '' }),
+        h('img', { src: `${document.body.dataset.media || '/media/'}${p.thumb}`, alt: '' }),
         h('div', { class: 'badges' },
           p.id === current.cover_photo_id ? h('span', { class: 'badge' }, 'COVER') : null,
           p.id === current.map_photo_id ? h('span', { class: 'badge map' }, 'MAP') : null),
