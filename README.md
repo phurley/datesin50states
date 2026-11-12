@@ -99,6 +99,21 @@ A collection is a page that shows several maps together, e.g. `/the-road-crew/` 
 - **Failures:** if Jev or Vision is unreachable, content is allowed and the error is logged, so an outage doesn't stop uploads.
 - **Keys:** the Vision key belongs to the Google Cloud project `datesin50states` (same one as Google sign-in). It's restricted to the Cloud Vision API and to the server's IP (138.197.22.230), so it only works from the server. SafeSearch's first 1,000 images a month are free, then about $1.50 per 1,000.
 
+## Traffic report
+
+Admins see `/admin/stats` (linked from `/admin`): views, visitors, returning share, who's on now, views per day, a state heat map, top maps/pages/referrers, devices, busiest hours, and sign-up counts, filterable by range and map.
+
+- **Counting** (`lib/stats.js`): each page sends a beacon to `POST /hit` after it loads, so bots that don't run JavaScript aren't counted. Only map and state pages are recorded, in `page_views`. A visitor is an HMAC of IP + user agent with a secret salt (in `settings`). No IP address and no cookie is stored. Members viewing their own map, known bot user agents, and reloads within 30s are skipped. Hours and days use `STATS_TZ` (default `America/Los_Angeles`).
+- **Backfill** from nginx logs (kept 14 days), for days before the beacon. Re-running replaces earlier backfilled rows:
+
+  ```bash
+  ssh root@datesin50states.com
+  cd /opt/datesin50states/current
+  zcat -f /var/log/nginx/access.log* | sudo -u dates env $(cat /etc/datesin50states.env | xargs) node scripts/backfill-stats.js
+  ```
+
+  The log is shared with allisonhurley.com and doesn't record the host, so the script keeps only real map/state pages, fetched by a browser that also loaded this site's CSS/JS. Those days show as faded bars.
+
 ## Photo storage (Cloudflare R2)
 
 Production photos live in the R2 bucket **`datesin50states-media`** (Cloudflare account phurley@gmail.com) and are served from **`https://media.datesin50states.com`**, the bucket's custom domain, cached by Cloudflare. Serving photos is free on R2; storage is free up to 10 GB.

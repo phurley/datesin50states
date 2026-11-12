@@ -18,6 +18,7 @@ import { albumKind, collectionTitle, syncAlbum, isSyncing } from './lib/icloud.j
 import { randomSlug, cleanSlug } from './lib/slugs.js';
 import { checkText, checkImage, recordFlag, strikeForPhotos } from './lib/moderation.js';
 import * as views from './lib/views.js';
+import { visitorId, isBot, deviceOf, referrerHost, resolvePath, recordView, isRepeat, report } from './lib/stats.js';
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -44,6 +45,24 @@ app.get('/.well-known/apple-developer-domain-association.txt', (_req, res) => {
 app.get('/healthz', (_req, res) => { db.prepare('SELECT 1').get(); res.type('text').send('ok'); });
 
 app.use(loadAuthor);
+
+// Page-view beacon (see lib/stats.js). Always 204, so it never tells a caller anything.
+const siteHost = new URL(config.baseUrl).hostname.replace(/^www\./, '');
+app.post('/hit', express.text({ type: '*/*', limit: '2kb' }), (req, res) => {
+  res.status(204).end();
+  try {
+    const ua = String(req.headers['user-agent'] || '');
+    if (req.headers.origin !== new URL(config.baseUrl).origin || isBot(ua)) return;
+    const body = JSON.parse(req.body || '{}');
+    const page = resolvePath(body.p, ROOT_MAP_ID);
+    if (!page) return;
+    const visitor = visitorId(req.ip, ua);
+    if (isRepeat(visitor, page.path)) return;
+    const own = req.author && (req.author.map_id === page.map_id || db.prepare(
+      "SELECT 1 FROM collection_members WHERE collection_id = ? AND map_id = ? AND status = 'active'").get(page.map_id, req.author.map_id));
+    recordView({ ts: now(), ...page, visitor, referrer: referrerHost(String(body.r || ''), siteHost), device: deviceOf(ua), own: Boolean(own) });
+  } catch { /* bad beacon: ignore */ }
+});
 const form = express.urlencoded({ extended: false, limit: '64kb' });
 const now = () => new Date().toISOString();
 
@@ -690,6 +709,23 @@ app.get('/admin', requireAdmin, (req, res) => {
   const flags = db.prepare(`SELECT f.kind, f.detail, f.created_at, a.name, m.slug FROM moderation_events f
     LEFT JOIN authors a ON a.id = f.author_id LEFT JOIN maps m ON m.id = f.map_id ORDER BY f.id DESC LIMIT 25`).all();
   res.send(views.adminPage({ author: req.author, codes, maps, blocked, flags, msg: req.query.msg, error: req.query.error }));
+});
+
+app.get('/admin/stats', requireAdmin, (req, res) => {
+  const range = ['7', '30', '90', 'all'].includes(req.query.range) ? req.query.range : '30';
+  const mapId = Number(req.query.map) || null;
+  const stats = report({ days: range === 'all' ? null : Number(range), mapId, tz: process.env.STATS_TZ || 'America/Los_Angeles' });
+  const maps = db.prepare("SELECT id, slug, is_root, kind FROM maps ORDER BY is_root DESC, slug").all();
+  const people = {
+    accounts: db.prepare('SELECT COUNT(*) AS n FROM authors WHERE map_id IS NOT NULL').get().n,
+    newAccounts: db.prepare('SELECT COUNT(*) AS n FROM authors WHERE map_id IS NOT NULL AND created_at >= ?').get(stats.since.replace('T', ' ').slice(0, 19)).n,
+    maps: db.prepare("SELECT COUNT(*) AS n FROM maps WHERE kind = 'map'").get().n,
+    collections: db.prepare("SELECT COUNT(*) AS n FROM maps WHERE kind = 'collection'").get().n,
+    entries: db.prepare('SELECT COUNT(*) AS n FROM entries').get().n,
+    photos: db.prepare('SELECT COUNT(*) AS n FROM photos').get().n,
+    statesCovered: db.prepare('SELECT COUNT(DISTINCT state) AS n FROM entries').get().n,
+  };
+  res.send(views.statsPage({ author: req.author, stats, people, maps, range, mapId }));
 });
 
 app.post('/admin/unblock/:id', requireAdmin, form, formGuard, (req, res) => {
