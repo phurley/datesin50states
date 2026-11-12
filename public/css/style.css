@@ -134,7 +134,14 @@ img { max-width: 100%; }
 .usa.touring a.st { cursor: inherit; }
 .usa .st path, .pin circle { vector-effect: non-scaling-stroke; }
 .pin { transition: opacity .9s ease; }
-.usa.touring .pin:not(.tour-on) { opacity: 0; }
+/* While touring, the route's stop dots replace the count pins. */
+.usa.touring .pin { opacity: 0; }
+.tour-route { pointer-events: none; filter: drop-shadow(0 0 1.5px var(--card)) drop-shadow(0 0 1px var(--card)); }
+.tour-route .leg { fill: none; stroke: var(--ink); stroke-width: 3.6; stroke-linecap: round; stroke-dasharray: 0 10; opacity: .5; }
+.tour-route .leg-now { opacity: .9; }
+.tour-route .stop { fill: var(--card); stroke: var(--ink); stroke-width: 1.4; opacity: .75; }
+.tour-route .stop-now { fill: var(--rust); stroke-width: 2; opacity: 1; animation: stop-pop .5s ease-out; }
+@keyframes stop-pop { from { r: 1; } }
 .tour-play {
   position: absolute; right: 0; top: 50%; margin-top: -17px; width: 34px; height: 34px; border-radius: 50%;
   border: 1.5px solid currentColor; background: transparent; color: var(--ink-soft); opacity: .28;
@@ -170,7 +177,7 @@ img { max-width: 100%; }
   .tour-ctl { flex: 1; justify-content: space-between; }
   .tour-date { flex: 1; max-width: none; }
 }
-@media (prefers-reduced-motion: reduce) { .tour-ctl, .usa.touring .st.tour-new { animation: none; } .usa .st, .pin { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .tour-ctl, .usa.touring .st.tour-new, .tour-route .stop-now { animation: none; } .usa .st, .pin { transition: none; } }
 .map-foot { position: relative; display: flex; justify-content: center; align-items: center; min-height: 44px; margin-top: 14px; }
 .map-legend { font: 14px var(--sans); color: var(--ink-soft); text-align: center; margin: 0; padding: 0 44px; }
 .map-legend[hidden] { display: none; }

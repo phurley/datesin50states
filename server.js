@@ -10,7 +10,9 @@ import {
   loadAuthor, requireAuthor, formGuard, startSession, endSession, parseCookies, cookie, appendCookie,
   appleRedirect, appleCallback, googleReady, googleRedirect, googleCallback, INVITE_COOKIE, PENDING_COOKIE,
 } from './lib/auth.js';
-import { storeImage, removeImage } from './lib/media.js';
+import { storeImage, removeImage, validGps } from './lib/media.js';
+import { geoAlbersUsa } from 'd3-geo';
+import { geocodeEntry, geocodeBackfill } from './lib/geocode.js';
 import { commitImage, mediaUrl } from './lib/storage.js';
 import { albumKind, collectionTitle, syncAlbum, isSyncing } from './lib/icloud.js';
 import { randomSlug, cleanSlug } from './lib/slugs.js';
@@ -30,6 +32,8 @@ app.use((_req, res, next) => {
 
 const staticOpts = { maxAge: config.prod ? '7d' : 0 };
 app.use(express.static(path.resolve('public'), staticOpts));
+// exifr (lite: JPEG + HEIC) lets the editor read GPS/date before it shrinks a photo.
+app.get('/js/vendor/exifr.js', (_req, res) => res.sendFile(path.resolve('node_modules/exifr/dist/lite.umd.js'), staticOpts));
 // nginx serves /media directly in production; this is the fallback for dev.
 app.use('/media', express.static(config.mediaDir, { maxAge: '365d', immutable: true }));
 app.get('/.well-known/apple-developer-domain-association.txt', (_req, res) => {
@@ -108,6 +112,37 @@ function mapPhotos(ids) {
   return out;
 }
 
+// Same projection us-atlas used to draw the map (Albers USA, 975x610), so GPS lands on it.
+const albers = geoAlbersUsa().scale(1300).translate([487.5, 305]);
+const median = (xs) => { const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+// Where each tour stop sits on the map, first that lands in (or right next to) the entry's state:
+// the median of its photos' GPS, then its geocoded place, then the state's center.
+function tourStops(entries) {
+  const gps = {};
+  if (entries.length) {
+    for (const r of db.prepare(`SELECT entry_id, lat, lng FROM photos WHERE lat IS NOT NULL AND entry_id IN (${IN(entries.map((e) => e.id))})`)
+      .all(...entries.map((e) => e.id))) {
+      const xy = albers([r.lng, r.lat]);
+      if (xy) (gps[r.entry_id] ||= []).push(xy);
+    }
+  }
+  return entries.map((e) => {
+    const st = views.STATE_BY_CODE[e.state];
+    const inState = (p) => {
+      if (!p || !st) return false;
+      const [x0, y0, x1, y1] = st.b, pad = 8;
+      return p[0] >= x0 - pad && p[0] <= x1 + pad && p[1] >= y0 - pad && p[1] <= y1 + pad;
+    };
+    const pts = gps[e.id];
+    const fromPhotos = pts?.length ? [median(pts.map((p) => p[0])), median(pts.map((p) => p[1]))] : null;
+    const fromPlace = e.place_lat != null ? albers([e.place_lng, e.place_lat]) : null;
+    const [x, y] = [fromPhotos, fromPlace].find(inState) || st?.c || [487.5, 305];
+    // Whole map units (~3 km): plenty for the map, and never pinpoints an address.
+    return { id: e.id, state: e.state, title: e.title, date: e.date, x: Math.round(x), y: Math.round(y) };
+  });
+}
+
 function stateCounts(ids) {
   const out = {};
   for (const r of db.prepare(`SELECT state, COUNT(*) AS n FROM entries WHERE map_id IN (${IN(ids)}) GROUP BY state`).all(...ids)) out[r.state] = r.n;
@@ -178,7 +213,7 @@ function renderMap(req, res, map) {
     if (!e.thumbs.length) e.thumbs = [views.stateArt(e.state)];
   }
   // The map's "play" tour: every entry, oldest date first (undated last).
-  const tour = db.prepare(`SELECT id, state, title, date FROM entries WHERE map_id IN (${IN(ids)}) ORDER BY date IS NULL, date, id`).all(...ids);
+  const tour = tourStops(db.prepare(`SELECT id, state, title, date, place_lat, place_lng FROM entries WHERE map_id IN (${IN(ids)}) ORDER BY date IS NULL, date, id`).all(...ids));
   res.send(views.mapPage({
     author: req.author, map, base: mapBase(map), canEdit: canEdit(req, map, ids), welcome: 'welcome' in req.query,
     counts: stateCounts(ids), photos: mapPhotos(ids), recent, tour, members: collectionMembers(map),
@@ -746,6 +781,7 @@ api.post('/entries', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(req.author.map_id, state, entry.title, entry.date, entry.place, entry.body, entry.album_url, req.author.id);
   const id = Number(lastInsertRowid);
   if (entry.album_url) kickSync(id);
+  if (entry.place) geocodeEntry(id);
   res.status(201).json({ entry: getEntry(id) });
 });
 
@@ -756,6 +792,7 @@ api.put('/entries/:id', (req, res) => {
   if (error) return res.status(400).json({ error });
   db.prepare(`UPDATE entries SET title = ?, date = ?, place = ?, body = ?, album_url = ?, updated_at = datetime('now')
     WHERE id = ?`).run(entry.title, entry.date, entry.place, entry.body, entry.album_url, existing.id);
+  if ((entry.place || null) !== (existing.place || null)) geocodeEntry(existing.id);
   if (entry.album_url !== existing.album_url) {
     db.prepare('UPDATE entries SET album_title = NULL WHERE id = ?').run(existing.id);
     if (entry.album_url) kickSync(existing.id);
@@ -797,10 +834,17 @@ api.post('/entries/:id/photos', upload.array('photos', 30), async (req, res) => 
   let refused = 0;
   const gate = photoGate(req.author.id);
   let pos = e.photos.reduce((m, p) => Math.max(m, p.position), 0);
-  for (const f of req.files || []) {
+  // The browser reads each photo's EXIF before shrinking it (which strips it) and sends one
+  // "meta" field per file, in the same order: { lat, lng, takenAt }.
+  const metas = [].concat(req.body?.meta ?? []);
+  for (const [i, f] of (req.files || []).entries()) {
     if (room <= 0) { skipped++; continue; }
     try {
       const img = await storeImage(f.buffer, { maxBytes: limits.maxBytes });
+      let meta = {};
+      try { meta = JSON.parse(metas[i] || '{}') || {}; } catch { /* ignore */ }
+      img.gps ||= validGps(meta.lat, meta.lng);
+      if (!img.takenAt && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(meta.takenAt || '')) img.takenAt = meta.takenAt;
       if (gate && !(await gate(img))) {
         refused++;
         if (db.prepare('SELECT blocked_at FROM authors WHERE id = ?').get(req.author.id).blocked_at) {
@@ -809,9 +853,9 @@ api.post('/entries/:id/photos', upload.array('photos', 30), async (req, res) => 
         continue;
       }
       await commitImage(img);
-      db.prepare(`INSERT INTO photos (entry_id, source, source_key, file, thumb, width, height, taken_at, position)
-        VALUES (?, 'upload', ?, ?, ?, ?, ?, ?, ?)`)
-        .run(e.id, img.file, img.file, img.thumb, img.width, img.height, img.takenAt, ++pos);
+      db.prepare(`INSERT INTO photos (entry_id, source, source_key, file, thumb, width, height, taken_at, position, lat, lng)
+        VALUES (?, 'upload', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(e.id, img.file, img.file, img.thumb, img.width, img.height, img.takenAt, ++pos, img.gps?.lat ?? null, img.gps?.lng ?? null);
       room--;
     } catch (err) {
       console.error('[upload]', f.originalname, err.message);
@@ -896,4 +940,5 @@ app.use((err, req, res, _next) => {
 
 app.listen(config.port, config.host, () => {
   console.log(`datesin50states on http://${config.host}:${config.port} (${config.prod ? 'production' : 'development'})`);
+  geocodeBackfill();
 });

@@ -23,6 +23,24 @@
 
   const fmtDate = (d) => d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : 'No date';
 
+  // Read where/when a photo was taken before prepare() re-encodes it (which drops EXIF).
+  async function readMeta(file) {
+    const out = {};
+    if (!window.exifr) return out;
+    try {
+      const g = await exifr.gps(file);
+      if (Number.isFinite(g?.latitude) && Number.isFinite(g?.longitude)) { out.lat = g.latitude; out.lng = g.longitude; }
+    } catch { /* no gps */ }
+    try {
+      const d = (await exifr.parse(file, ['DateTimeOriginal']))?.DateTimeOriginal;
+      if (d instanceof Date && !isNaN(d)) {
+        const p = (n) => String(n).padStart(2, '0');
+        out.takenAt = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+      }
+    } catch { /* no date */ }
+    return out;
+  }
+
   // Shrink big photos in the browser before upload (also turns HEIC into JPEG in Safari).
   async function prepare(file) {
     try {
@@ -134,7 +152,10 @@
       for (let i = 0; i < list.length; i += 4) {
         say(`Uploading ${Math.min(i + 4, list.length)} of ${list.length}…`);
         const fd = new FormData();
-        for (const file of list.slice(i, i + 4)) fd.append('photos', await prepare(file));
+        for (const file of list.slice(i, i + 4)) {
+          fd.append('meta', JSON.stringify(await readMeta(file)));
+          fd.append('photos', await prepare(file));
+        }
         try {
           const r = await api('POST', `/api/entries/${current.id}/photos`, fd);
           current = r.entry; dirty = true; renderPhotos();

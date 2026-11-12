@@ -59,6 +59,7 @@
 
 // Map tour: ▶ replays the trip in date order and loops. States start blank and are
 // revealed as the timeline reaches them; the current one is bright, earlier ones faded.
+// A dotted line draws itself from stop to stop (placed by photo GPS when we have it).
 // The map stays put unless you click it (or pinch out on a phone) to follow along zoomed in.
 // ‹ › step, clicking the date pauses/resumes, × or Esc ends the tour.
 (() => {
@@ -97,6 +98,54 @@
     frame = requestAnimationFrame(step);
   }
 
+  // --- Route: dotted arcs between stops, drawn up to the current one ---------
+  const NS = 'http://www.w3.org/2000/svg';
+  const route = svg.querySelector('.tour-route');
+  const DRAW_MS = still ? 0 : 1500;
+  let drawFrame = null;
+  const node = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
+  const same = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) < 2;
+
+  // A gentle arc from a to b: the control point is pushed sideways a little.
+  function arc(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy), bend = Math.min(len * 0.18, 60);
+    return { a, b, c: { x: (a.x + b.x) / 2 - (dy / len) * bend, y: (a.y + b.y) / 2 + (dx / len) * bend } };
+  }
+  // The first k (0..1) of that quadratic curve, as path data.
+  function partial({ a, b, c }, k) {
+    const q1 = { x: a.x + (c.x - a.x) * k, y: a.y + (c.y - a.y) * k };
+    const q2 = { x: c.x + (b.x - c.x) * k, y: c.y + (b.y - c.y) * k };
+    const e = { x: q1.x + (q2.x - q1.x) * k, y: q1.y + (q2.y - q1.y) * k };
+    const f = (n) => n.toFixed(1);
+    return `M${f(a.x)},${f(a.y)}Q${f(q1.x)},${f(q1.y)} ${f(e.x)},${f(e.y)}`;
+  }
+
+  function drawRoute() {
+    cancelAnimationFrame(drawFrame);
+    if (!route) return;
+    const legs = node('g', {}), dots = node('g', {});
+    route.replaceChildren(legs, dots);
+    const reached = stops.slice(0, idx + 1);
+    const cur = reached[reached.length - 1];
+    const dot = (s, now) => dots.append(node('circle', { class: now ? 'stop stop-now' : 'stop', cx: s.x, cy: s.y, r: now ? 5.5 : 3.5 }));
+    reached.slice(0, -1).forEach((s, i) => {
+      if (i && !same(reached[i - 1], s)) legs.append(node('path', { class: 'leg', d: partial(arc(reached[i - 1], s), 1) }));
+      if (!same(s, cur)) dot(s, false);
+    });
+    const prev = reached[reached.length - 2];
+    if (!prev || same(prev, cur)) return dot(cur, true);
+    const leg = node('path', { class: 'leg leg-now' }), seg = arc(prev, cur);
+    legs.append(leg);
+    if (!DRAW_MS || document.visibilityState === 'hidden') { leg.setAttribute('d', partial(seg, 1)); return dot(cur, true); }
+    const t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / DRAW_MS);
+      leg.setAttribute('d', partial(seg, ease(k) || 0.001));
+      if (k < 1) drawFrame = requestAnimationFrame(step); else dot(cur, true);
+    };
+    drawFrame = requestAnimationFrame(step);
+  }
+
   // A box around the state at a modest zoom (never closer than half the map), kept inside the map.
   function boxFor(code) {
     const b = svg.querySelector(`.st[data-code="${code}"] path`).getBBox();
@@ -130,6 +179,7 @@
       }
     }
     svg.querySelectorAll('.pin').forEach((p) => p.classList.toggle('tour-on', p.dataset.code === cur));
+    drawRoute();
   }
 
   function show(i) {
@@ -180,6 +230,8 @@
     play.hidden = false;
     if (legend) legend.hidden = false;
     svg.classList.remove('following');
+    cancelAnimationFrame(drawFrame);
+    route?.replaceChildren();
     svg.querySelectorAll('.tour-on, .tour-past, .tour-future, .tour-new')
       .forEach((el) => el.classList.remove('tour-on', 'tour-past', 'tour-future', 'tour-new'));
     zoomTo(FULL, ZOOM_MS, () => { if (!touring) { svg.classList.remove('touring'); svg.setAttribute('viewBox', FULL.join(' ')); } });
