@@ -60,7 +60,8 @@
 // Map tour: ▶ replays the trip in date order and loops. States start blank and are
 // revealed as the timeline reaches them; the current one is bright, earlier ones faded.
 // A dotted line draws itself from stop to stop (placed by photo GPS when we have it).
-// The map stays put unless you click it (or pinch out on a phone) to follow along zoomed in.
+// The map gently follows the trip (never closer than 60% of the whole map); click it, or
+// pinch in on a phone, for the whole map, and again to follow. Runs of dates in one state go faster.
 // ‹ › step, clicking the date pauses/resumes, × or Esc ends the tour.
 (() => {
   const svg = document.querySelector('.usa');
@@ -73,8 +74,10 @@
 
   const W = 975, H = 610, FULL = [0, 0, W, H];
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const ZOOM_MS = still ? 0 : 1600;
+  const ZOOM_MS = still ? 0 : 2200;
   const STEP_MS = still ? 6000 : 5800;
+  const QUICK_STEP_MS = still ? 6000 : 2800; // the next date is in the same state
+  const MIN_VIEW = 0.6; // never zoom closer than this fraction of the whole map
   const dateBtn = ctl.querySelector('.tour-date');
   const legend = document.querySelector('.map-legend');
   const visited = [...svg.querySelectorAll('.st.visited')];
@@ -84,7 +87,7 @@
     ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
     : 'Undated';
   const setVB = (v) => { vb = v; svg.setAttribute('viewBox', v.map((n) => n.toFixed(2)).join(' ')); };
-  const ease = (k) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
+  const ease = (k) => (1 - Math.cos(Math.PI * k)) / 2; // gentle in-out; chains smoothly when retargeted mid-move
 
   function zoomTo(target, ms, done) {
     cancelAnimationFrame(frame);
@@ -103,6 +106,7 @@
   const route = svg.querySelector('.tour-route');
   const DRAW_MS = still ? 0 : 1500;
   const LEAD_MS = 500; // the line sets off this long before the next state appears
+  const QUICK_DRAW_MS = 800; // a hop within the same state
   let drawFrame = null, revealTimer = null;
   const node = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
   const same = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) < 2;
@@ -121,7 +125,7 @@
     return `M${f(a.x)},${f(a.y)}Q${f(q1.x)},${f(q1.y)} ${f(e.x)},${f(e.y)}`;
   }
 
-  // Returns true while a new leg is being drawn.
+  // Returns the draw time (ms) when a new leg is being drawn, else false.
   function drawRoute() {
     cancelAnimationFrame(drawFrame);
     if (!route) return false;
@@ -137,26 +141,31 @@
     const prev = reached[reached.length - 2];
     if (!prev || same(prev, cur)) { dot(cur, true); return false; }
     const leg = node('path', { class: 'leg leg-now' }), seg = arc(prev, cur);
+    const dur = prev.state === cur.state ? QUICK_DRAW_MS : DRAW_MS;
     legs.append(leg);
     if (!DRAW_MS || document.visibilityState === 'hidden') { leg.setAttribute('d', partial(seg, 1)); dot(cur, true); return false; }
     const t0 = performance.now();
     const step = (now) => {
-      const k = Math.min(1, (now - t0) / DRAW_MS);
+      const k = Math.min(1, (now - t0) / dur);
       leg.setAttribute('d', partial(seg, Math.max(0.001, (1 - Math.cos(Math.PI * k)) / 2))); // gentle in-out, so it's visibly underway early
       if (k < 1) drawFrame = requestAnimationFrame(step); else dot(cur, true);
     };
     drawFrame = requestAnimationFrame(step);
-    return true;
+    return dur;
   }
 
-  // A box around the state at a modest zoom (never closer than half the map), kept inside the map.
-  function boxFor(code) {
-    const b = svg.querySelector(`.st[data-code="${code}"] path`).getBBox();
-    let w = Math.max(b.width * 1.9, W * 0.5), h = Math.max(b.height * 1.9, H * 0.5);
+  // A view around stop i's state plus where the line comes from, padded, never closer than
+  // MIN_VIEW of the whole map, kept inside the map. Same-state runs get the same view, so it holds still.
+  function boxFor(i) {
+    const s = stops[i], prev = stops[i - 1];
+    const b = svg.querySelector(`.st[data-code="${s.state}"] path`).getBBox();
+    let x0 = Math.min(b.x, s.x), y0 = Math.min(b.y, s.y), x1 = Math.max(b.x + b.width, s.x), y1 = Math.max(b.y + b.height, s.y);
+    if (prev) { x0 = Math.min(x0, prev.x); y0 = Math.min(y0, prev.y); x1 = Math.max(x1, prev.x); y1 = Math.max(y1, prev.y); }
+    let w = Math.max((x1 - x0) * 1.35, W * MIN_VIEW), h = Math.max((y1 - y0) * 1.35, H * MIN_VIEW);
     if (w / h > W / H) h = (w * H) / W; else w = (h * W) / H;
     w = Math.min(w, W); h = Math.min(h, H);
-    const x = Math.max(0, Math.min(W - w, b.x + b.width / 2 - w / 2));
-    const y = Math.max(0, Math.min(H - h, b.y + b.height / 2 - h / 2));
+    const x = Math.max(0, Math.min(W - w, (x0 + x1) / 2 - w / 2));
+    const y = Math.max(0, Math.min(H - h, (y0 + y1) / 2 - h / 2));
     return [x, y, w, h];
   }
 
@@ -164,7 +173,7 @@
     if (!touring || follow === on) return;
     follow = on;
     svg.classList.toggle('following', on);
-    zoomTo(on ? boxFor(stops[idx].state) : FULL, ZOOM_MS);
+    zoomTo(on ? boxFor(idx) : FULL, ZOOM_MS);
   }
 
   // Reveal every state the timeline has reached; the rest of the map is blank.
@@ -195,8 +204,9 @@
       dateBtn.querySelector('small').textContent = `${s.name} · ${s.title}`;
       dateBtn.title = `${s.name}: ${s.title}`;
     };
-    if (drawRoute()) revealTimer = setTimeout(reveal, LEAD_MS); else reveal();
-    if (follow) zoomTo(boxFor(s.state), ZOOM_MS);
+    const drawing = drawRoute();
+    if (drawing) revealTimer = setTimeout(reveal, Math.min(LEAD_MS, drawing / 3)); else reveal();
+    if (follow) zoomTo(boxFor(idx), ZOOM_MS);
     schedule();
   }
 
@@ -205,9 +215,11 @@
     ctl.classList.remove('running');
     if (!running) return;
     void ctl.offsetWidth; // restart the progress bar animation
-    ctl.style.setProperty('--dwell', `${STEP_MS / 1000}s`);
+    // Hurry through a run of dates in one state; the last one in the run gets the full time.
+    const dwell = stops[idx + 1]?.state === stops[idx].state ? QUICK_STEP_MS : STEP_MS;
+    ctl.style.setProperty('--dwell', `${dwell / 1000}s`);
     ctl.classList.add('running');
-    timer = setTimeout(() => { if (!document.hidden) show(idx + 1); else schedule(); }, STEP_MS);
+    timer = setTimeout(() => { if (!document.hidden) show(idx + 1); else schedule(); }, dwell);
   }
 
   function setRunning(on) {
@@ -223,6 +235,8 @@
     ctl.hidden = false;
     touring = true;
     svg.classList.add('touring');
+    follow = !still; // ease in to follow the trip (reduced motion: keep the whole map)
+    svg.classList.toggle('following', follow);
     running = true;
     ctl.classList.remove('paused');
     show(0);
