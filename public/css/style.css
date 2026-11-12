@@ -544,3 +544,12 @@ svg.daily .vdots circle { fill: var(--teal); stroke: var(--card); stroke-width: 
 @media (max-width: 520px) {
   .gauges { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; }
 }
+
+/* Profile: your readers */
+.mini-gauges { display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: center; margin: 14px 0 6px; }
+.mini-gauges .odometer { margin-top: 0; }
+.mini-gauges .odometer span { font-size: 22px; padding: 6px 7px 5px; }
+.spark { display: block; width: 100%; height: 44px; margin: 10px 0 4px; }
+.spark .area { fill: rgba(196, 83, 43, .14); }
+.spark .ln { fill: none; stroke: var(--rust); stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.traffic-note { font-size: 14px; margin: 6px 0 0; text-align: center; }

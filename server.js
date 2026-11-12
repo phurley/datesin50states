@@ -46,6 +46,9 @@ app.get('/healthz', (_req, res) => { db.prepare('SELECT 1').get(); res.type('tex
 
 app.use(loadAuthor);
 
+const STATS_TZ = process.env.STATS_TZ || 'America/Los_Angeles';
+const statsRange = (req) => (['7', '30', '90', 'all'].includes(req.query.range) ? req.query.range : '30');
+
 // Page-view beacon (see lib/stats.js). Always 204, so it never tells a caller anything.
 const siteHost = new URL(config.baseUrl).hostname.replace(/^www\./, '');
 app.post('/hit', express.text({ type: '*/*', limit: '2kb' }), (req, res) => {
@@ -451,6 +454,7 @@ function profileData(req) {
       FROM collection_members cm JOIN maps c ON c.id = cm.collection_id
       WHERE cm.map_id = ? ORDER BY c.owner_map_id = ? DESC, c.created_at`).all(map.id, map.id) : [],
     limits: map ? mapLimits(map.id) : null,
+    traffic: map ? report({ days: 30, mapId: map.id, tz: STATS_TZ }) : null,
     appleReady: Boolean(config.appleClientId),
     googleReady: googleReady(),
     msg: req.query.msg,
@@ -459,6 +463,25 @@ function profileData(req) {
 }
 
 app.get('/profile', requireSignedIn, (req, res) => res.send(views.profilePage(profileData(req))));
+
+// A map's people see their own map's traffic, and that of collections their map owns.
+app.get('/profile/stats', requireSignedIn, (req, res) => {
+  const own = req.author.map_id ? getMap(req.author.map_id) : null;
+  if (!own) return res.redirect('/profile');
+  const maps = [own, ...db.prepare("SELECT * FROM maps WHERE kind = 'collection' AND owner_map_id = ? ORDER BY slug").all(own.id)];
+  const range = statsRange(req);
+  const map = maps.find((m) => m.id === Number(req.query.map)) || own;
+  const stats = report({ days: range === 'all' ? null : Number(range), mapId: map.id, tz: STATS_TZ });
+  const ids = scopeIds(map);
+  const one = (sql) => db.prepare(sql.replace('$IN', IN(ids))).get(...ids).n;
+  const tiles = [
+    [one('SELECT COUNT(*) AS n FROM entries WHERE map_id IN ($IN)'), 'entries written'],
+    [one('SELECT COUNT(*) AS n FROM photos p JOIN entries e ON e.id = p.entry_id WHERE e.map_id IN ($IN)'), 'photos'],
+    [one('SELECT COUNT(DISTINCT state) AS n FROM entries WHERE map_id IN ($IN)'), 'of 50 states written about'],
+    [Object.keys(stats.states).length, 'states readers looked at'],
+  ];
+  res.send(views.statsPage({ author: req.author, stats, tiles, maps, range, mapId: map.id, owner: map }));
+});
 
 // Public text people can set, with labels for messages and the moderation prompt.
 const PUBLIC_FIELDS = {
@@ -712,9 +735,9 @@ app.get('/admin', requireAdmin, (req, res) => {
 });
 
 app.get('/admin/stats', requireAdmin, (req, res) => {
-  const range = ['7', '30', '90', 'all'].includes(req.query.range) ? req.query.range : '30';
+  const range = statsRange(req);
   const mapId = Number(req.query.map) || null;
-  const stats = report({ days: range === 'all' ? null : Number(range), mapId, tz: process.env.STATS_TZ || 'America/Los_Angeles' });
+  const stats = report({ days: range === 'all' ? null : Number(range), mapId, tz: STATS_TZ });
   const maps = db.prepare("SELECT id, slug, is_root, kind FROM maps ORDER BY is_root DESC, slug").all();
   const people = {
     accounts: db.prepare('SELECT COUNT(*) AS n FROM authors WHERE map_id IS NOT NULL').get().n,
@@ -725,7 +748,12 @@ app.get('/admin/stats', requireAdmin, (req, res) => {
     photos: db.prepare('SELECT COUNT(*) AS n FROM photos').get().n,
     statesCovered: db.prepare('SELECT COUNT(DISTINCT state) AS n FROM entries').get().n,
   };
-  res.send(views.statsPage({ author: req.author, stats, people, maps, range, mapId }));
+  const tiles = [
+    [people.accounts, `people signed up${people.newAccounts ? ` <em>+${people.newAccounts} new</em>` : ''}`],
+    [people.maps, `maps${people.collections ? ` · ${people.collections} collections` : ''}`],
+    [people.entries, 'entries written'], [people.photos, 'photos'], [people.statesCovered, 'of 50 states written about'],
+  ];
+  res.send(views.statsPage({ author: req.author, stats, tiles, maps, range, mapId }));
 });
 
 app.post('/admin/unblock/:id', requireAdmin, form, formGuard, (req, res) => {

@@ -103,6 +103,8 @@ A collection is a page that shows several maps together, e.g. `/the-road-crew/` 
 
 Admins see `/admin/stats` (linked from `/admin`): views, visitors, returning share, who's on now, views per day, a state heat map, top maps/pages/referrers, devices, busiest hours, and sign-up counts, filterable by range and map.
 
+Every map's people get a **Your readers** card on `/profile` (last 30 days, with a sparkline) and the same report for just their map at `/profile/stats`. It covers their own map and any collections it owns, and leaves out the site-wide numbers and other maps.
+
 - **Counting** (`lib/stats.js`): each page sends a beacon to `POST /hit` after it loads, so bots that don't run JavaScript aren't counted. Only map and state pages are recorded, in `page_views`. A visitor is an HMAC of IP + user agent with a secret salt (in `settings`). No IP address and no cookie is stored. Members viewing their own map, known bot user agents, and reloads within 30s are skipped. Hours and days use `STATS_TZ` (default `America/Los_Angeles`).
 - **Backfill** from nginx logs (kept 14 days), for days before the beacon. Re-running replaces earlier backfilled rows:
 
