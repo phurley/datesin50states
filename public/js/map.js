@@ -102,7 +102,8 @@
   const NS = 'http://www.w3.org/2000/svg';
   const route = svg.querySelector('.tour-route');
   const DRAW_MS = still ? 0 : 1500;
-  let drawFrame = null;
+  const LEAD_MS = 500; // the line sets off this long before the next state appears
+  let drawFrame = null, revealTimer = null;
   const node = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
   const same = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) < 2;
 
@@ -120,9 +121,10 @@
     return `M${f(a.x)},${f(a.y)}Q${f(q1.x)},${f(q1.y)} ${f(e.x)},${f(e.y)}`;
   }
 
+  // Returns true while a new leg is being drawn.
   function drawRoute() {
     cancelAnimationFrame(drawFrame);
-    if (!route) return;
+    if (!route) return false;
     const legs = node('g', {}), dots = node('g', {});
     route.replaceChildren(legs, dots);
     const reached = stops.slice(0, idx + 1);
@@ -133,17 +135,18 @@
       if (!same(s, cur)) dot(s, false);
     });
     const prev = reached[reached.length - 2];
-    if (!prev || same(prev, cur)) return dot(cur, true);
+    if (!prev || same(prev, cur)) { dot(cur, true); return false; }
     const leg = node('path', { class: 'leg leg-now' }), seg = arc(prev, cur);
     legs.append(leg);
-    if (!DRAW_MS || document.visibilityState === 'hidden') { leg.setAttribute('d', partial(seg, 1)); return dot(cur, true); }
+    if (!DRAW_MS || document.visibilityState === 'hidden') { leg.setAttribute('d', partial(seg, 1)); dot(cur, true); return false; }
     const t0 = performance.now();
     const step = (now) => {
       const k = Math.min(1, (now - t0) / DRAW_MS);
-      leg.setAttribute('d', partial(seg, ease(k) || 0.001));
+      leg.setAttribute('d', partial(seg, Math.max(0.001, (1 - Math.cos(Math.PI * k)) / 2))); // gentle in-out, so it's visibly underway early
       if (k < 1) drawFrame = requestAnimationFrame(step); else dot(cur, true);
     };
     drawFrame = requestAnimationFrame(step);
+    return true;
   }
 
   // A box around the state at a modest zoom (never closer than half the map), kept inside the map.
@@ -179,16 +182,20 @@
       }
     }
     svg.querySelectorAll('.pin').forEach((p) => p.classList.toggle('tour-on', p.dataset.code === cur));
-    drawRoute();
   }
 
   function show(i) {
     idx = (i + stops.length) % stops.length;
     const s = stops[idx];
-    paint();
-    dateBtn.querySelector('b').textContent = fmt(s.date);
-    dateBtn.querySelector('small').textContent = `${s.name} · ${s.title}`;
-    dateBtn.title = `${s.name}: ${s.title}`;
+    // Start the travel line first; the state (and its date) appear while it's still drawing.
+    clearTimeout(revealTimer);
+    const reveal = () => {
+      paint();
+      dateBtn.querySelector('b').textContent = fmt(s.date);
+      dateBtn.querySelector('small').textContent = `${s.name} · ${s.title}`;
+      dateBtn.title = `${s.name}: ${s.title}`;
+    };
+    if (drawRoute()) revealTimer = setTimeout(reveal, LEAD_MS); else reveal();
     if (follow) zoomTo(boxFor(s.state), ZOOM_MS);
     schedule();
   }
@@ -231,6 +238,7 @@
     if (legend) legend.hidden = false;
     svg.classList.remove('following');
     cancelAnimationFrame(drawFrame);
+    clearTimeout(revealTimer);
     route?.replaceChildren();
     svg.querySelectorAll('.tour-on, .tour-past, .tour-future, .tour-new')
       .forEach((el) => el.classList.remove('tour-on', 'tour-past', 'tour-future', 'tour-new'));
