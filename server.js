@@ -182,7 +182,7 @@ function photosFor(entryIds) {
 
 function entriesFor(ids, state) {
   ids = [].concat(ids);
-  const entries = db.prepare(`SELECT e.*, a.name AS author_name, m.slug AS map_slug, m.is_root AS map_is_root, m.title_script AS map_title_script, m.title AS map_title
+  const entries = db.prepare(`SELECT e.*, a.name AS author_name, a.photo_pile AS author_photo_pile, m.slug AS map_slug, m.is_root AS map_is_root, m.title_script AS map_title_script, m.title AS map_title
     FROM entries e LEFT JOIN authors a ON a.id = e.author_id JOIN maps m ON m.id = e.map_id
     WHERE e.map_id IN (${IN(ids)}) AND e.state = ? ORDER BY COALESCE(e.date, e.created_at) DESC, e.id DESC`).all(...ids, state).map((e) => ({ ...e }));
   const photos = photosFor(entries.map((e) => e.id));
@@ -531,7 +531,7 @@ app.post('/profile', requireSignedIn, form, formGuard, async (req, res) => {
   const map = req.author.map_id ? getMap(req.author.map_id) : null;
   const bad = await moderateText(req, { name: req.author.name, ...(map || {}) }, map ? ['name', ...MAP_TEXT] : ['name']);
   if (bad) return back(`error=${encodeURIComponent(bad)}`);
-  db.prepare('UPDATE authors SET name = ? WHERE id = ?').run(name, req.author.id);
+  db.prepare('UPDATE authors SET name = ?, photo_pile = ? WHERE id = ?').run(name, req.body.photo_pile ? 1 : 0, req.author.id);
   if (map) {
     const err = saveMapSettings(req.body, map);
     if (err) return back(`error=${encodeURIComponent(err)}`);

@@ -372,6 +372,9 @@ img { max-width: 100%; }
 .stack input, .profile-main input, .profile-main select {
   font: 16px var(--sans); color: var(--ink); padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--paper-2); background: #fff; width: 100%;
 }
+.profile-main label.check { display: flex; align-items: flex-start; gap: 10px; font: 600 14px var(--sans); color: var(--ink); cursor: pointer; }
+.profile-main label.check input { width: 18px; height: 18px; padding: 0; margin: 2px 0 0; flex: none; accent-color: var(--rust); }
+.profile-main label.check small { display: block; font-weight: 400; font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
 .stack input:focus, .profile-main input:focus { outline: 2px solid var(--mustard); border-color: transparent; }
 .profile-main label small { font-weight: 400; }
 .qr { width: min(300px, 80vw); margin: 16px auto 0; transition: opacity .4s; }
