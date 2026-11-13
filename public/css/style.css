@@ -269,6 +269,13 @@ img { max-width: 100%; }
 .photos .ph { display: block; margin-bottom: 10px; break-inside: avoid; border-radius: 6px; overflow: hidden; background: var(--paper-2); }
 .photos img { display: block; width: 100%; height: auto; transition: transform .3s; }
 .photos .ph:hover img { transform: scale(1.03); }
+/* Photo pile (3+ photos): hidden until pile.js stacks them, so the grid never flashes first. */
+.js .photos[data-pile]:not(.piled):not(.dealt) .ph { visibility: hidden; animation: pile-failsafe 0s 3s forwards; }
+@keyframes pile-failsafe { to { visibility: visible; } } /* if pile.js never runs, show the grid anyway */
+.pile-wrap { position: relative; transition: height .5s ease; }
+.photos.piled .ph { position: relative; box-shadow: 0 0 0 5px #fffdf7, 0 8px 22px rgba(40, 28, 18, .35); transition: box-shadow .4s; cursor: pointer; will-change: transform; }
+.photos.piled .ph.landed { box-shadow: 0 0 0 0 #fffdf7, 0 0 0 rgba(40, 28, 18, 0); }
+.pile-hint { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); font: 600 13px var(--sans); color: var(--ink-soft); pointer-events: none; transition: opacity .3s; white-space: nowrap; }
 .album-link { font: 600 14px var(--sans); margin: 8px 0 0; }
 
 @media (max-width: 600px) {
