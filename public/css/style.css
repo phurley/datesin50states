@@ -276,6 +276,12 @@ img { max-width: 100%; }
 .photos.piled .ph { position: relative; box-shadow: 0 0 0 5px #fffdf7, 0 8px 22px rgba(40, 28, 18, .35); transition: box-shadow .4s; cursor: pointer; will-change: transform; }
 .photos.piled .ph.landed { box-shadow: 0 0 0 0 #fffdf7, 0 0 0 rgba(40, 28, 18, 0); }
 .pile-hint { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); font: 600 13px var(--sans); color: var(--ink-soft); pointer-events: none; transition: opacity .3s; white-space: nowrap; }
+/* Videos in the grid: the poster frame with a play button and the running time. */
+.photos .ph.is-video { position: relative; }
+.photos .ph .play { position: absolute; inset: 0; margin: auto; width: 54px; height: 54px; border-radius: 50%; background: rgba(22, 17, 13, .62); box-shadow: 0 0 0 2px rgba(255, 253, 247, .85); pointer-events: none; transition: transform .2s, background .2s; }
+.photos .ph .play::after { content: ''; position: absolute; left: 21px; top: 16px; border-style: solid; border-width: 11px 0 11px 18px; border-color: transparent transparent transparent #fffdf7; }
+.photos .ph.is-video:hover .play { transform: scale(1.08); background: rgba(196, 83, 43, .85); }
+.photos .ph .dur { position: absolute; right: 8px; bottom: 8px; font: 600 12px var(--sans); color: #fffdf7; background: rgba(22, 17, 13, .7); padding: 2px 7px; border-radius: 999px; pointer-events: none; }
 .album-link { font: 600 14px var(--sans); margin: 8px 0 0; }
 
 @media (max-width: 600px) {
@@ -295,7 +301,9 @@ img { max-width: 100%; }
 .lightbox { position: fixed; inset: 0; background: rgba(22, 17, 13, .94); z-index: 50; display: grid; place-items: center; }
 .lightbox[hidden] { display: none; }
 .lightbox figure { margin: 0; max-width: 94vw; max-height: 90vh; text-align: center; }
-.lightbox img { max-width: 94vw; max-height: 82vh; border-radius: 4px; box-shadow: 0 10px 40px #000; }
+.lightbox img, .lightbox video { max-width: 94vw; max-height: 82vh; border-radius: 4px; box-shadow: 0 10px 40px #000; }
+.lightbox video { background: #000; }
+.lightbox video[hidden], .lightbox img[hidden] { display: none; }
 .lightbox figcaption { color: #f5ecd7; font: 15px var(--sans); margin-top: 10px; }
 .lightbox button { position: absolute; background: none; border: 0; color: #f5ecd7; font: 48px/1 var(--sans); cursor: pointer; padding: 16px; }
 .lb-close { top: 4px; right: 8px; }
@@ -469,6 +477,7 @@ dialog.editor::backdrop { background: rgba(43, 33, 24, .55); backdrop-filter: bl
 @media (hover: none) { .ed-photo .tools { opacity: 1; } }
 .ed-photo .tools button { background: rgba(255, 255, 255, .9); border: 0; border-radius: 6px; font-size: 12px; padding: 3px 6px; cursor: pointer; }
 .ed-photo .badges { position: absolute; top: 4px; left: 4px; display: flex; gap: 3px; }
+.ed-photo .badge.vid { background: var(--rust); color: #fff; }
 .ed-photo .badge { background: var(--mustard); color: var(--ink); font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; }
 .ed-photo .badge.map { background: var(--teal); color: #fff; }
 .ed-sub { font: 600 13px var(--sans); color: var(--ink-soft); letter-spacing: .03em; margin: 6px 0 0; }

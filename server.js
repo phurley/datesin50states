@@ -1,6 +1,6 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, createWriteStream, mkdirSync, unlinkSync } from 'node:fs';
 import express from 'express';
 import multer from 'multer';
 import QRCode from 'qrcode';
@@ -13,7 +13,7 @@ import {
 import { storeImage, removeImage, validGps } from './lib/media.js';
 import { geoAlbersUsa } from 'd3-geo';
 import { geocodeEntry, geocodeBackfill } from './lib/geocode.js';
-import { commitImage, mediaUrl } from './lib/storage.js';
+import { commitImage, commitThumb, mediaUrl, presignPut, storedSize, removeKey, r2Enabled, VIDEO_TYPES, VIDEO_CACHE } from './lib/storage.js';
 import { albumKind, collectionTitle, syncAlbum, isSyncing } from './lib/icloud.js';
 import { randomSlug, cleanSlug } from './lib/slugs.js';
 import { checkText, checkImage, recordFlag, strikeForPhotos } from './lib/moderation.js';
@@ -87,10 +87,13 @@ const canEdit = (req, m, ids = scopeIds(m)) => Boolean(req.author?.map_id && ids
 // Admin-backed maps have no limits; everyone else is on the free tier.
 function mapLimits(mapId) {
   const admin = db.prepare("SELECT 1 FROM authors WHERE map_id = ? AND role = 'admin'").get(mapId);
-  const used = db.prepare('SELECT COUNT(*) AS n FROM photos p JOIN entries e ON e.id = p.entry_id WHERE e.map_id = ?').get(mapId).n;
+  const count = (kind) => db.prepare('SELECT COUNT(*) AS n FROM photos p JOIN entries e ON e.id = p.entry_id WHERE e.map_id = ? AND p.kind = ?').get(mapId, kind).n;
+  const used = count('photo'), videoUsed = count('video');
   return admin
-    ? { tier: 'admin', used, limit: null, remaining: Infinity, maxBytes: Infinity }
-    : { tier: 'free', used, limit: config.freePhotoLimit, remaining: Math.max(0, config.freePhotoLimit - used), maxBytes: config.freePhotoBytes };
+    ? { tier: 'admin', used, limit: null, remaining: Infinity, maxBytes: Infinity,
+        videoUsed, videoLimit: null, videoRemaining: Infinity, maxVideoBytes: config.adminVideoBytes }
+    : { tier: 'free', used, limit: config.freePhotoLimit, remaining: Math.max(0, config.freePhotoLimit - used), maxBytes: config.freePhotoBytes,
+        videoUsed, videoLimit: config.freeVideoLimit, videoRemaining: Math.max(0, config.freeVideoLimit - videoUsed), maxVideoBytes: config.freeVideoBytes };
 }
 
 function createMap(name) {
@@ -173,7 +176,7 @@ function stateCounts(ids) {
 
 function photosFor(entryIds) {
   if (!entryIds.length) return {};
-  const rows = db.prepare(`SELECT id, entry_id, source, file, thumb, width, height, caption, taken_at, position
+  const rows = db.prepare(`SELECT id, entry_id, source, kind, duration, file, thumb, width, height, caption, taken_at, position
     FROM photos WHERE entry_id IN (${entryIds.map(() => '?').join(',')}) ORDER BY position, id`).all(...entryIds);
   const by = {};
   for (const r of rows) (by[r.entry_id] ||= []).push({ ...r });
@@ -937,6 +940,103 @@ api.post('/entries/:id/photos', upload.array('photos', 30), async (req, res) => 
   const limitNote = notes.join(' ') || null;
   res.json({ entry: getEntry(e.id), failed, limitNote, limits: mapLimits(e.map_id) });
 });
+
+// --- Videos ---------------------------------------------------------------------
+// The browser uploads the video itself straight to R2 (a presigned URL, so the 1 GB server never
+// handles the bytes), then sends us a poster frame to finish. The poster goes through the same
+// moderation as any photo and becomes the video's thumbnail everywhere (map, postcards, covers).
+// Without R2 configured (local dev) the app takes the upload itself at PUT /api/uploads/….
+
+const mb = (n) => `${Math.round(n / 1048576)} MB`;
+const dropUpload = (key) => db.prepare('DELETE FROM video_uploads WHERE key = ?').run(key);
+const keyOk = (s) => /^[0-9a-f]{2}\/[0-9a-f-]{36}\.(mp4|m4v|mov|webm)$/.test(s);
+
+api.post('/entries/:id/videos/init', async (req, res) => {
+  const e = ownEntry(req, req.params.id);
+  if (!e) return res.status(404).json({ error: 'Not found.' });
+  const limits = mapLimits(e.map_id);
+  const ext = String(req.body?.name || '').toLowerCase().match(/\.(mp4|m4v|mov|webm)$/)?.[1];
+  const size = Number(req.body?.size);
+  if (!ext) return res.status(400).json({ error: 'Videos need to be MP4, MOV or WebM.' });
+  if (!(size > 0)) return res.status(400).json({ error: 'That video looks empty.' });
+  if (size > limits.maxVideoBytes) return res.status(400).json({ error: `That video is ${mb(size)}; the limit is ${mb(limits.maxVideoBytes)}.` });
+  if (limits.videoRemaining <= 0) return res.status(403).json({ error: `Video limit reached (free maps hold ${limits.videoLimit} ${limits.videoLimit === 1 ? 'video' : 'videos'}).` });
+  const recent = db.prepare("SELECT COUNT(*) AS n FROM video_uploads WHERE author_id = ? AND created_at > datetime('now', '-1 hour')").get(req.author.id).n;
+  if (recent >= 20) return res.status(429).json({ error: 'Lots of unfinished video uploads; give it a few minutes.' });
+  const id = crypto.randomUUID();
+  const key = `${id.slice(0, 2)}/${id}.${ext}`;
+  db.prepare('INSERT INTO video_uploads (key, author_id, entry_id) VALUES (?, ?, ?)').run(key, req.author.id, e.id);
+  const contentType = VIDEO_TYPES[ext];
+  const direct = r2Enabled();
+  res.json({ key, contentType, direct, cacheControl: VIDEO_CACHE, url: direct ? await presignPut(key, contentType) : `/api/uploads/${key}` });
+});
+
+// Local-dev only: take the video's bytes ourselves, streamed to disk with a size cap.
+api.put('/uploads/:dir/:file', (req, res) => {
+  const key = `${req.params.dir}/${req.params.file}`;
+  const row = keyOk(key) && db.prepare('SELECT * FROM video_uploads WHERE key = ? AND author_id = ?').get(key, req.author.id);
+  if (r2Enabled() || !row) return res.status(404).json({ error: 'Not found.' });
+  const max = mapLimits(req.author.map_id).maxVideoBytes;
+  mkdirSync(path.join(config.mediaDir, req.params.dir), { recursive: true });
+  const dest = path.join(config.mediaDir, key);
+  const out = createWriteStream(dest);
+  let n = 0, failed = false;
+  const fail = (code, msg) => { if (failed) return; failed = true; out.destroy(); try { unlinkSync(dest); } catch { /* none yet */ } res.status(code).json({ error: msg }); };
+  req.on('data', (c) => { n += c.length; if (n > max) { fail(413, `Over the ${mb(max)} limit.`); req.destroy(); } });
+  req.on('error', () => fail(400, 'Upload interrupted.'));
+  req.pipe(out);
+  out.on('finish', () => { if (!failed) res.json({ ok: true }); });
+  out.on('error', () => fail(500, 'Couldn’t save the video.'));
+});
+
+const posterUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+
+api.post('/entries/:id/videos/complete', posterUpload.single('poster'), async (req, res) => {
+  const e = ownEntry(req, req.params.id);
+  if (!e) return res.status(404).json({ error: 'Not found.' });
+  const key = String(req.body?.key || '');
+  const row = keyOk(key) && db.prepare('SELECT * FROM video_uploads WHERE key = ? AND author_id = ? AND entry_id = ?').get(key, req.author.id, e.id);
+  if (!row) return res.status(404).json({ error: 'That upload isn’t pending.' });
+  const abandon = async (code, error) => { dropUpload(key); await removeKey(key).catch(() => {}); return res.status(code).json({ error }); };
+  if (!req.file) return abandon(400, 'The video’s preview frame is missing.');
+  const limits = mapLimits(e.map_id);
+  const bytes = await storedSize(key).catch(() => null);
+  if (!bytes) return res.status(400).json({ error: 'The upload didn’t finish. Please try again.' });
+  if (bytes > limits.maxVideoBytes) return abandon(413, `That video is ${mb(bytes)}; the limit is ${mb(limits.maxVideoBytes)}.`);
+  if (limits.videoRemaining <= 0) return abandon(403, `Video limit reached (free maps hold ${limits.videoLimit} ${limits.videoLimit === 1 ? 'video' : 'videos'}).`);
+  let img;
+  try { img = await storeImage(req.file.buffer, { maxBytes: limits.maxBytes }); }
+  catch { return abandon(400, 'Couldn’t read the video’s preview frame.'); }
+  const gate = photoGate(req.author.id);
+  if (gate && !(await gate(img))) {
+    dropUpload(key); await removeKey(key).catch(() => {});
+    if (db.prepare('SELECT blocked_at FROM authors WHERE id = ?').get(req.author.id).blocked_at) {
+      return res.status(403).json({ error: 'This account has been blocked for uploading inappropriate photos.' });
+    }
+    return res.status(422).json({ error: 'That video wasn’t added because it looks inappropriate. Repeated inappropriate uploads will block the account.' });
+  }
+  await commitThumb(img);
+  const dur = Number(req.body.duration);
+  const pos = e.photos.reduce((m, p) => Math.max(m, p.position), 0) + 1;
+  tx(() => {
+    db.prepare(`INSERT INTO photos (entry_id, source, source_key, kind, duration, file, thumb, width, height, position)
+      VALUES (?, 'upload', ?, 'video', ?, ?, ?, ?, ?, ?)`)
+      .run(e.id, key, Number.isFinite(dur) && dur > 0 ? Math.round(dur * 10) / 10 : null, key, img.thumb, img.width, img.height, pos);
+    dropUpload(key);
+    db.prepare(`UPDATE entries SET cover_photo_id = COALESCE(cover_photo_id,
+      (SELECT id FROM photos WHERE entry_id = ? ORDER BY position LIMIT 1)) WHERE id = ?`).run(e.id, e.id);
+  });
+  res.json({ entry: getEntry(e.id), limits: mapLimits(e.map_id) });
+});
+
+// Uploads that were issued but never finished (closed tab, lost signal): remove the leftovers.
+async function sweepVideoUploads() {
+  for (const r of db.prepare("SELECT key FROM video_uploads WHERE created_at < datetime('now', '-1 day')").all()) {
+    try { await removeKey(r.key); dropUpload(r.key); } catch (err) { console.error('[video sweep]', r.key, err.message); }
+  }
+}
+sweepVideoUploads().catch(() => {});
+setInterval(() => sweepVideoUploads().catch(() => {}), 6 * 3600e3).unref();
 
 api.put('/photos/:id', (req, res) => {
   const p = ownPhoto(req, req.params.id);

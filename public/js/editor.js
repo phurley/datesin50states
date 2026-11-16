@@ -59,6 +59,58 @@
     }
   }
 
+  // --- Videos -------------------------------------------------------------------------
+  const isVideo = (f) => f.type.startsWith('video/') || /\.(mp4|m4v|mov|webm)$/i.test(f.name);
+  const waitFor = (el, ok, ms = 20000) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timed out')), ms);
+    el.addEventListener(ok, () => { clearTimeout(t); resolve(); }, { once: true });
+    el.addEventListener('error', () => { clearTimeout(t); reject(new Error('unreadable')); }, { once: true });
+  });
+
+  // The browser decodes the video just far enough to take a preview frame and read its size and
+  // length. If it can't (some iPhone HEVC files outside Safari), we say so before uploading anything.
+  async function videoInfo(file) {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+    try {
+      await waitFor(v, 'loadeddata');
+      if (!v.videoWidth) throw new Error('no picture');
+      const at = Number.isFinite(v.duration) ? Math.min(1, v.duration / 4) : 0;
+      if (at > 0) { v.currentTime = at; await waitFor(v, 'seeked'); }
+      const scale = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(v.videoWidth * scale);
+      c.height = Math.round(v.videoHeight * scale);
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+      if (!blob) throw new Error('no frame');
+      return { blob, width: v.videoWidth, height: v.videoHeight, duration: v.duration };
+    } finally {
+      URL.revokeObjectURL(url);
+      v.removeAttribute('src'); v.load();
+    }
+  }
+
+  // PUT with a progress callback (fetch can't report upload progress).
+  function putFile(url, file, headers, onProgress, withCsrf) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('PUT', url);
+      for (const [k, v] of Object.entries(headers)) x.setRequestHeader(k, v);
+      if (withCsrf) x.setRequestHeader('X-D50', '1');
+      x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      x.onload = () => {
+        if (x.status >= 200 && x.status < 300) return resolve();
+        let msg = `HTTP ${x.status}`;
+        try { msg = JSON.parse(x.responseText).error || msg; } catch { /* not JSON (R2 sends XML) */ }
+        reject(new Error(`Upload failed (${msg}).`));
+      };
+      x.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'));
+      x.send(file);
+    });
+  }
+
   const dlg = h('dialog', { class: 'editor' });
   document.body.append(dlg);
   let dirty = false;
@@ -105,7 +157,7 @@
     f.body.value = entry.body || '';
 
     const photosEl = h('div', { class: 'ed-photos' });
-    const fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+    const fileInput = h('input', { type: 'file', accept: 'image/*,video/*', multiple: true, hidden: true });
     const drop = h('div', { class: 'dropzone', tabindex: 0, role: 'button' });
     const syncBtn = h('button', { type: 'button', class: 'btn small ghost' }, 'Sync album now');
     const syncNote = h('span', { class: 'hint' });
@@ -114,23 +166,24 @@
     function renderPhotos() {
       const has = Boolean(current);
       drop.classList.toggle('disabled', !has);
-      drop.textContent = has ? 'Click to choose photos (pick “Photos” in the sidebar), or drop image files here' : 'Save the entry first, then add photos';
+      drop.textContent = has ? 'Click to choose photos or videos (pick “Photos” in the sidebar), or drop files here' : 'Save the entry first, then add photos or videos';
       syncBtn.hidden = current?.album_kind !== 'legacy';
       syncNote.textContent = current?.album_kind === 'collection'
         ? `Album linked${current.album_title ? ` (“${current.album_title}”)` : ''}: shown as a link on the entry. iCloud doesn’t allow importing this album type, so add the photos you want here.`
         : current?.syncing ? 'Pulling photos from iCloud…'
         : current?.album_error ? `Album sync failed: ${current.album_error}`
           : current?.album_synced_at ? `Album last synced ${current.album_synced_at} UTC` : '';
-      photosEl.replaceChildren(...(current?.photos || []).map((p) => h('div', { class: `ed-photo${p.id === current.cover_photo_id ? ' cover' : ''}` },
+      photosEl.replaceChildren(...(current?.photos || []).map((p) => h('div', { class: `ed-photo${p.id === current.cover_photo_id ? ' cover' : ''}${p.kind === 'video' ? ' is-video' : ''}` },
         h('img', { src: `${document.body.dataset.media || '/media/'}${p.thumb}`, alt: '' }),
         h('div', { class: 'badges' },
+          p.kind === 'video' ? h('span', { class: 'badge vid' }, '▶ VIDEO') : null,
           p.id === current.cover_photo_id ? h('span', { class: 'badge' }, 'COVER') : null,
           p.id === current.map_photo_id ? h('span', { class: 'badge map' }, 'MAP') : null),
         h('div', { class: 'tools' },
           h('button', { type: 'button', title: 'Use as cover', onclick: () => photoAction('PUT', p.id, { cover: true }) }, '★'),
           h('button', { type: 'button', title: p.id === current.map_photo_id ? 'Stop using on the map' : `Fill ${stateName} on the map with this photo`,
             onclick: () => photoAction('PUT', p.id, { map: p.id !== current.map_photo_id }) }, '🗺'),
-          h('button', { type: 'button', title: 'Remove photo', onclick: () => { if (confirm('Remove this photo?')) photoAction('DELETE', p.id); } }, '✕')))));
+          h('button', { type: 'button', title: 'Remove photo', onclick: () => { if (confirm(`Remove this ${p.kind === 'video' ? 'video' : 'photo'}?`)) photoAction('DELETE', p.id); } }, '✕')))));
       clearTimeout(pollTimer);
       if (current?.syncing) pollTimer = setTimeout(refresh, 3000);
     }
@@ -147,8 +200,10 @@
 
     async function uploadFiles(files) {
       if (!current) return say('Save the entry first.', true);
-      const list = [...files].filter((x) => x.type.startsWith('image/') || /\.(heic|heif)$/i.test(x.name));
-      if (!list.length) return;
+      const all = [...files];
+      const videos = all.filter(isVideo);
+      const list = all.filter((x) => !isVideo(x) && (x.type.startsWith('image/') || /\.(heic|heif)$/i.test(x.name)));
+      if (!list.length && !videos.length) return;
       for (let i = 0; i < list.length; i += 4) {
         say(`Uploading ${Math.min(i + 4, list.length)} of ${list.length}…`);
         const fd = new FormData();
@@ -163,7 +218,30 @@
           if (r.limitNote) return say(r.limitNote, true);
         } catch (e) { return say(e.message, true); }
       }
-      say('Photos added.');
+      let added = list.length ? 'Photos added.' : '';
+      for (const [i, file] of videos.entries()) {
+        try { await uploadVideo(file, videos.length > 1 ? `video ${i + 1} of ${videos.length}` : 'video'); added = 'Added.'; }
+        catch (e) { return say(e.message, true); }
+      }
+      if (added) say(added);
+    }
+
+    // browser -> storage directly (see /api/entries/:id/videos in the server), then we finish up.
+    async function uploadVideo(file, label) {
+      say(`Reading ${label}…`);
+      let info;
+      try { info = await videoInfo(file); }
+      catch { throw new Error(`${file.name}: this browser can’t read that video. MP4 (H.264) works everywhere; iPhone .mov files work in Safari.`); }
+      const init = await api('POST', `/api/entries/${current.id}/videos/init`, { name: file.name, size: file.size });
+      const headers = { 'Content-Type': init.contentType, ...(init.direct ? { 'Cache-Control': init.cacheControl } : {}) };
+      await putFile(init.url, file, headers, (p) => say(`Uploading ${label}… ${Math.round(p * 100)}%`), !init.direct);
+      say(`Finishing ${label}…`);
+      const fd = new FormData();
+      fd.append('key', init.key);
+      fd.append('duration', String(info.duration));
+      fd.append('poster', info.blob, 'poster.jpg');
+      const r = await api('POST', `/api/entries/${current.id}/videos/complete`, fd);
+      current = r.entry; dirty = true; renderPhotos();
     }
 
     drop.addEventListener('click', () => current && fileInput.click());
